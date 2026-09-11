@@ -5,8 +5,14 @@ import json
 import time
 from typing import Optional
 from models import Product, Marketplace
+from referral_builder import build_referral_url
 
 logger = logging.getLogger(__name__)
+
+
+def _ref(url: str, mp: Marketplace) -> str:
+    """Helper: build referral URL."""
+    return build_referral_url(url, mp)
 
 
 def _try_playwright():
@@ -128,7 +134,7 @@ def parse_wb_playwright(limit: int = 30) -> list[Product]:
                             external_id=pid,
                             name=name[:200],
                             url=url,
-                            referral_url=url,
+                            referral_url=_ref(url, Marketplace.WB),
                             category="electronics",
                         ))
                     except Exception:
@@ -172,9 +178,8 @@ def _wb_api_item_to_product(item: dict) -> Optional[Product]:
             external_id=pid,
             name=name[:200],
             url=url,
-            referral_url=url,
+            referral_url=_ref(url, Marketplace.WB),
             image_url=img,
-            price_original=orig_price,
             price_sale=sale_price,
             discount_percent=discount,
             rating=float(item.get("reviewRating", 0) or 0),
@@ -255,7 +260,7 @@ def parse_ozon_playwright(limit: int = 30) -> list[Product]:
                         external_id=pid,
                         name=name,
                         url=url,
-                        referral_url=url,
+                        referral_url=_ref(url, Marketplace.OZON),
                         category="electronics",
                     ))
                     if len(products) >= limit:
@@ -338,7 +343,7 @@ def parse_aliexpress_playwright(limit: int = 30) -> list[Product]:
                             external_id=pid,
                             name=name,
                             url=url,
-                            referral_url=url,
+                            referral_url=_ref(url, Marketplace.ALIEXPRESS),
                             category="electronics",
                         ))
                         if len(products) >= limit:
@@ -367,9 +372,8 @@ def _ali_jsonld_to_product(item: dict) -> Optional[Product]:
             external_id=pid,
             name=item.get("name", "")[:200],
             url=url,
-            referral_url=url,
+            referral_url=_ref(url, Marketplace.ALIEXPRESS),
             image_url=item.get("image", ""),
-            price_original=price * 1.4,
             price_sale=price,
             discount_percent=28,
             rating=float(item.get("aggregateRating", {}).get("ratingValue", 0) or 0),
@@ -454,7 +458,7 @@ def parse_ym_playwright(limit: int = 30) -> list[Product]:
                             external_id=pid,
                             name=name,
                             url=url,
-                            referral_url=url,
+                            referral_url=_ref(url, Marketplace.YANDEX_MARKET),
                             category="electronics",
                         ))
                         if len(products) >= limit:
@@ -485,9 +489,8 @@ def _ym_jsonld_to_product(item: dict) -> Optional[Product]:
             external_id=pid,
             name=item.get("name", "")[:200],
             url=url if url.startswith("http") else f"https://market.yandex.ru{url}",
-            referral_url=url,
+            referral_url=_ref(url, Marketplace.YANDEX_MARKET),
             image_url=item.get("image", ""),
-            price_original=price * 1.3,
             price_sale=price,
             discount_percent=23,
             rating=float(item.get("aggregateRating", {}).get("ratingValue", 0) or 0),

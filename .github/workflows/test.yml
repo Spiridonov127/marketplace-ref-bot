@@ -32,10 +32,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           ADMIN_USER_IDS: ${{ secrets.ADMIN_USER_IDS }}
-          WB_AFFILIATE_ID: ${{ secrets.WB_AFFILIATE_ID }}
-          OZON_AFFILIATE_ID: ${{ secrets.OZON_AFFILIATE_ID }}
           ALIEXPRESS_AFFILIATE_ID: ${{ secrets.ALIEXPRESS_AFFILIATE_ID }}
-          YANDEX_MARKET_AFFILIATE_ID: ${{ secrets.YANDEX_MARKET_AFFILIATE_ID }}
+          ALIEXPRESS_APP_KEY: ${{ secrets.ALIEXPRESS_APP_KEY }}
+          GDESLON_AFFILIATE_ID: ${{ secrets.GDESLON_AFFILIATE_ID }}
+          GDESLON_WB_CAMPAIGN_ID: ${{ secrets.GDESLON_WB_CAMPAIGN_ID }}
+          GDESLON_OZON_CAMPAIGN_ID: ${{ secrets.GDESLON_OZON_CAMPAIGN_ID }}
+          GDESLON_YM_CAMPAIGN_ID: ${{ secrets.GDESLON_YM_CAMPAIGN_ID }}
         run: |
           echo "=== STEP 1: Parse ==="
           python scripts/parse_only.py

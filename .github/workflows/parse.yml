@@ -1,7 +1,6 @@
 name: Parse Products
 on:
   schedule:
-    # Парсинг каждые 6 часов
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
@@ -27,10 +26,12 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          WB_AFFILIATE_ID: ${{ secrets.WB_AFFILIATE_ID }}
-          OZON_AFFILIATE_ID: ${{ secrets.OZON_AFFILIATE_ID }}
           ALIEXPRESS_AFFILIATE_ID: ${{ secrets.ALIEXPRESS_AFFILIATE_ID }}
-          YANDEX_MARKET_AFFILIATE_ID: ${{ secrets.YANDEX_MARKET_AFFILIATE_ID }}
+          ALIEXPRESS_APP_KEY: ${{ secrets.ALIEXPRESS_APP_KEY }}
+          GDESLON_AFFILIATE_ID: ${{ secrets.GDESLON_AFFILIATE_ID }}
+          GDESLON_WB_CAMPAIGN_ID: ${{ secrets.GDESLON_WB_CAMPAIGN_ID }}
+          GDESLON_OZON_CAMPAIGN_ID: ${{ secrets.GDESLON_OZON_CAMPAIGN_ID }}
+          GDESLON_YM_CAMPAIGN_ID: ${{ secrets.GDESLON_YM_CAMPAIGN_ID }}
           MIN_DISCOUNT_PERCENT: ${{ vars.MIN_DISCOUNT_PERCENT || '20' }}
           MAX_PRODUCTS_PER_PARSE: ${{ vars.MAX_PRODUCTS_PER_PARSE || '50' }}
         run: python scripts/parse_only.py

@@ -14,10 +14,14 @@ class Config:
     ])
 
     # Реферальные параметры маркетплейсов
-    WB_AFFILIATE_ID: str = os.getenv("WB_AFFILIATE_ID", "")
-    OZON_AFFILIATE_ID: str = os.getenv("OZON_AFFILIATE_ID", "")
     ALIEXPRESS_AFFILIATE_ID: str = os.getenv("ALIEXPRESS_AFFILIATE_ID", "")
-    YANDEX_MARKET_AFFILIATE_ID: str = os.getenv("YANDEX_MARKET_AFFILIATE_ID", "")
+    ALIEXPRESS_APP_KEY: str = os.getenv("ALIEXPRESS_APP_KEY", "")
+
+    # GdeSlon CPA-сеть
+    GDESLON_AFFILIATE_ID: str = os.getenv("GDESLON_AFFILIATE_ID", "")
+    GDESLON_WB_CAMPAIGN_ID: str = os.getenv("GDESLON_WB_CAMPAIGN_ID", "")
+    GDESLON_OZON_CAMPAIGN_ID: str = os.getenv("GDESLON_OZON_CAMPAIGN_ID", "")
+    GDESLON_YM_CAMPAIGN_ID: str = os.getenv("GDESLON_YM_CAMPAIGN_ID", "")
 
     # Настройки постинга
     POSTS_PER_DAY: int = int(os.getenv("POSTS_PER_DAY", "4"))
