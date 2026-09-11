@@ -1,8 +1,7 @@
 name: Auto Post
 on:
-  schedule:
-    # Посты 4 раза в день: 09:00, 13:00, 17:00, 21:00 UTC+3
-    - cron: '0 6,10,14,18 * * *'
+  # schedule:
+  #   - cron: '0 6,10,14,18 * * *'
   workflow_dispatch:
 
 jobs:
