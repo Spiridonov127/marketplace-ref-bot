@@ -1,55 +1,40 @@
-"""Планировщик: циклы парсинга, автопостинг, аналитика."""
+"""Планировщик: Яндекс Маркет → Яндекс Дзен."""
 import logging
-import random
-from datetime import datetime
-from typing import Optional
-
-import schedule
 import telebot
+import schedule
 
 from config import config
 from database import Database
 from models import Marketplace, Product
-from content_generator import generate_post, generate_single_product_post
+from content_generator import generate_dzen_article, generate_dzen_post_text
+from referral_builder import build_ym_cpa_link
 
 logger = logging.getLogger(__name__)
 
 
 def run_parse_cycle(db: Database) -> int:
-    """Полный цикл парсинга всех маркетплейсов."""
-    from parsers.playwright_parsers import parse_all_playwright
+    """Парсинг Яндекс Маркета."""
+    from parsers.playwright_parsers import parse_ym_playwright
 
     total_found = 0
+    logger.info("[Scheduler] Parsing Yandex Market...")
 
-    # Основной метод: Playwright (работает в GitHub Actions)
-    logger.info("[Scheduler] Trying Playwright parsers...")
     try:
-        products = parse_all_playwright(limit_per_mp=config.MAX_PRODUCTS_PER_PARSE)
+        products = parse_ym_playwright(limit=config.MAX_PRODUCTS_PER_PARSE)
         inserted = db.insert_products(products)
         total_found += inserted
-        logger.info(f"[Scheduler] Playwright: {inserted} new products")
+        logger.info(f"[Scheduler] YM: {inserted} products")
     except Exception as e:
-        logger.error(f"[Scheduler] Playwright error: {e}")
+        logger.error(f"[Scheduler] YM error: {e}")
 
-    # Fallback: прямые API (могут не работать из-за антибот-защиты)
-    if total_found < 10:
-        logger.info("[Scheduler] Few products from Playwright, trying API fallback...")
-        try:
-            from parsers.wb_parser import WildberriesParser
-            wb = WildberriesParser(affiliate_id=config.WB_AFFILIATE_ID)
-            deals = wb.parse_deals(min_discount=config.MIN_DISCOUNT_PERCENT, limit=50)
-            inserted = db.insert_products(deals)
-            total_found += inserted
-            logger.info(f"[Scheduler] WB API fallback: {inserted} products")
-        except Exception as e:
-            logger.warning(f"[Scheduler] WB API fallback error: {e}")
-
-    logger.info(f"[Scheduler] Total found: {total_found}")
+    logger.info(f"[Scheduler] Total: {total_found}")
     return total_found
 
 
-def run_post_cycle(db: Database, bot: telebot.TeleBot) -> bool:
-    """Публикация одного поста в канал."""
+def run_dzen_post_cycle(db: Database) -> bool:
+    """Генерация и публикация статьи в Дзен."""
+    from dzen_poster import post_to_dzen
+
     products = db.get_unposted_products(
         limit=config.MAX_PRODUCTS_PER_POST,
         min_discount=config.MIN_DISCOUNT_PERCENT,
@@ -59,73 +44,79 @@ def run_post_cycle(db: Database, bot: telebot.TeleBot) -> bool:
         logger.info("[Scheduler] No products to post")
         return False
 
-    # Если 1 товар — подробный пост, иначе — подборка
-    if len(products) == 1:
-        post_text = generate_single_product_post(products[0])
-    else:
-        post_text = generate_post(products)
+    # Обновляем CPA-ссылки
+    for p in products:
+        p.referral_url = build_ym_cpa_link(p.url)
 
-    try:
-        sent = bot.send_message(
-            config.TELEGRAM_CHANNEL_ID,
-            post_text,
-            parse_mode="HTML",
-            disable_web_page_preview=False,
-        )
+    # Генерируем статью для Дзена
+    title, body_html = generate_dzen_article(products)
+
+    # Публикуем в Дзен
+    success = post_to_dzen(title, body_html)
+
+    if success:
+        from database import Database as DB
         db.mark_posted([p.id for p in products])
-        db.record_post(
-            config.TELEGRAM_CHANNEL_ID,
-            sent.message_id,
-            post_text,
-            [p.id for p in products],
-        )
-        logger.info(f"[Scheduler] Posted {len(products)} products")
+        logger.info(f"[Scheduler] Posted to Dzen: {len(products)} products")
         return True
-    except Exception as e:
-        logger.error(f"[Scheduler] Post error: {e}")
+    else:
+        # Если автопостинг не удался, сохраняем текст для ручной публикации
+        post_text = generate_dzen_post_text(products)
+        _save_draft(title, body_html, post_text)
+        logger.warning("[Scheduler] Dzen auto-post failed, draft saved")
         return False
 
 
-def run_digest_cycle(db: Database, bot: telebot.TeleBot):
-    """Публикация дайджеста с лучшими скидками по каждому маркетплейсу."""
-    from content_generator import generate_digest_post
+def _save_draft(title: str, body_html: str, text: str):
+    """Сохраняет черновик для ручной публикации."""
+    import os
+    from datetime import datetime
 
-    top_by_mp = {}
-    for mp in Marketplace:
-        products = db.get_unposted_products(limit=1, min_discount=15)
-        if products:
-            top_by_mp[mp] = products
+    draft_dir = "data/drafts"
+    os.makedirs(draft_dir, exist_ok=True)
 
-    if not top_by_mp:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filepath = os.path.join(draft_dir, f"draft_{timestamp}.md")
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"# {title}\n\n")
+        f.write(f"## HTML (для Дзена)\n\n{body_html}\n\n")
+        f.write(f"## Текст (для копирования)\n\n{text}\n\n")
+        f.write(f"---\nСоздано: {datetime.now().isoformat()}\n")
+
+    logger.info(f"[Scheduler] Draft saved: {filepath}")
+
+
+def run_digest(db: Database) -> bool:
+    """Дайджест лучших скидок."""
+    from dzen_poster import post_to_dzen
+
+    products = db.get_unposted_products(limit=5, min_discount=25)
+    if not products:
         return False
 
-    post_text = generate_digest_post(top_by_mp)
-    try:
-        bot.send_message(config.TELEGRAM_CHANNEL_ID, post_text, parse_mode="HTML")
-        logger.info("[Scheduler] Digest posted")
+    for p in products:
+        p.referral_url = build_ym_cpa_link(p.url)
+
+    title, body_html = generate_dzen_article(products[:3])
+    success = post_to_dzen(title, body_html)
+
+    if success:
+        db.mark_posted([p.id for p in products[:3]])
         return True
-    except Exception as e:
-        logger.error(f"[Scheduler] Digest error: {e}")
-        return False
+    return False
 
 
-def setup_schedule(db: Database, bot: telebot.TeleBot):
-    """Настройка расписания автопилота."""
-    # Парсинг: раз в 6 часов
+def setup_schedule(db: Database, bot: telebot.TeleBot = None):
+    """Настройка расписания."""
     schedule.every(6).hours.do(run_parse_cycle, db=db)
-    # Постинг: через равные интервалы
-    schedule.every(config.POST_INTERVAL_HOURS).hours.do(run_post_cycle, db=db, bot=bot)
-    # Дайджест: раз в день в 10:00
-    schedule.every().day.at("10:00").do(run_digest_cycle, db=db, bot=bot)
+    schedule.every(config.POST_INTERVAL_HOURS).hours.do(run_dzen_post_cycle, db=db)
+    schedule.every().day.at("10:00").do(run_digest, db=db)
 
     logger.info(
-        f"[Scheduler] Schedule configured: parse every 6h, "
-        f"post every {config.POST_INTERVAL_HOURS}h, "
-        f"digest at 10:00"
+        f"[Scheduler] YM → Dzen schedule: parse 6h, post {config.POST_INTERVAL_HOURS}h, digest 10:00"
     )
 
 
 def run_scheduler():
-    """Запуск цикла планировщика."""
-    logger.info("[Scheduler] Running pending jobs...")
     schedule.run_pending()

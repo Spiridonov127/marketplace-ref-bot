@@ -1,4 +1,4 @@
-"""Точка входа: запуск бота + планировщика автопилота."""
+"""Точка входа: Яндекс Маркет → Яндекс Дзен."""
 import logging
 import os
 import threading
@@ -7,7 +7,7 @@ import time
 from config import config
 from database import Database
 from bot import create_bot
-from scheduler import setup_schedule, run_parse_cycle, run_post_cycle, run_scheduler
+from scheduler import setup_schedule, run_parse_cycle, run_dzen_post_cycle, run_scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,17 +22,18 @@ logger = logging.getLogger(__name__)
 
 def ensure_dirs():
     os.makedirs("data", exist_ok=True)
+    os.makedirs("data/drafts", exist_ok=True)
 
 
 def main():
     ensure_dirs()
     logger.info("=" * 50)
-    logger.info("Marketplace Ref Bot starting...")
+    logger.info("YM → Dzen Bot starting...")
     logger.info("=" * 50)
 
     if not config.is_configured:
         logger.error(
-            "Missing config! Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID "
+            "Missing config! Set TELEGRAM_BOT_TOKEN and YANDEX_DISTRIBUTION_PARTNER_ID "
             "in .env or environment variables."
         )
         return
@@ -40,8 +41,8 @@ def main():
     db = Database(config.DB_PATH)
     bot = create_bot(db)
 
-    # Первый парсинг при старте
-    logger.info("[Startup] Initial parse cycle...")
+    # Первый парсинг
+    logger.info("[Startup] Initial parse...")
     try:
         count = run_parse_cycle(db)
         logger.info(f"[Startup] Parsed {count} products")
@@ -62,10 +63,10 @@ def main():
 
     scheduler_thread = threading.Thread(target=scheduler_loop, daemon=True)
     scheduler_thread.start()
-    logger.info("[Startup] Scheduler thread started")
+    logger.info("[Startup] Scheduler started")
 
     # Запуск бота
-    logger.info("[Startup] Bot polling started")
+    logger.info("[Startup] Bot started")
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
 
 
