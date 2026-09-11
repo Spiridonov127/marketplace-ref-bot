@@ -1,0 +1,62 @@
+name: Full Pipeline (Manual Test)
+on:
+  workflow_dispatch:
+
+jobs:
+  full-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download database
+        uses: actions/download-artifact@v4
+        with:
+          name: marketplace-db
+          path: data/
+        continue-on-error: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Parse + Post
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          ADMIN_USER_IDS: ${{ secrets.ADMIN_USER_IDS }}
+          WB_AFFILIATE_ID: ${{ secrets.WB_AFFILIATE_ID }}
+          OZON_AFFILIATE_ID: ${{ secrets.OZON_AFFILIATE_ID }}
+          ALIEXPRESS_AFFILIATE_ID: ${{ secrets.ALIEXPRESS_AFFILIATE_ID }}
+          YANDEX_MARKET_AFFILIATE_ID: ${{ secrets.YANDEX_MARKET_AFFILIATE_ID }}
+        run: |
+          echo "=== STEP 1: Parse ==="
+          python scripts/parse_only.py
+          echo ""
+          echo "=== STEP 2: Post ==="
+          python scripts/post_only.py
+          echo ""
+          echo "=== STEP 3: Generate Dashboard ==="
+          python scripts/generate_dashboard.py || true
+
+      - name: Upload database
+        uses: actions/upload-artifact@v4
+        with:
+          name: marketplace-db
+          path: data/marketplace.db
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Upload dashboard
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard
+          path: dashboard/index.html
+          if-no-files-found: ignore
