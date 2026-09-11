@@ -11,48 +11,38 @@ from config import config
 from database import Database
 from models import Marketplace, Product
 from content_generator import generate_post, generate_single_product_post
-from parsers.wb_parser import WildberriesParser
-from parsers.ozon_parser import OzonParser
-from parsers.aliexpress_parser import AliExpressParser
-from parsers.ym_parser import YandexMarketParser
 
 logger = logging.getLogger(__name__)
 
 
-def create_parsers() -> dict:
-    return {
-        Marketplace.WB: WildberriesParser(affiliate_id=config.WB_AFFILIATE_ID),
-        Marketplace.OZON: OzonParser(affiliate_id=config.OZON_AFFILIATE_ID),
-        Marketplace.ALIEXPRESS: AliExpressParser(affiliate_id=config.ALIEXPRESS_AFFILIATE_ID),
-        Marketplace.YANDEX_MARKET: YandexMarketParser(affiliate_id=config.YANDEX_MARKET_AFFILIATE_ID),
-    }
-
-
 def run_parse_cycle(db: Database) -> int:
     """Полный цикл парсинга всех маркетплейсов."""
-    parsers = create_parsers()
+    from parsers.playwright_parsers import parse_all_playwright
+
     total_found = 0
 
-    for mp, parser in parsers.items():
-        logger.info(f"[Scheduler] Parsing {mp.display_name}...")
+    # Основной метод: Playwright (работает в GitHub Actions)
+    logger.info("[Scheduler] Trying Playwright parsers...")
+    try:
+        products = parse_all_playwright(limit_per_mp=config.MAX_PRODUCTS_PER_PARSE)
+        inserted = db.insert_products(products)
+        total_found += inserted
+        logger.info(f"[Scheduler] Playwright: {inserted} new products")
+    except Exception as e:
+        logger.error(f"[Scheduler] Playwright error: {e}")
+
+    # Fallback: прямые API (могут не работать из-за антибот-защиты)
+    if total_found < 10:
+        logger.info("[Scheduler] Few products from Playwright, trying API fallback...")
         try:
-            deals = parser.parse_deals(
-                min_discount=config.MIN_DISCOUNT_PERCENT,
-                limit=config.MAX_PRODUCTS_PER_PARSE,
-            )
+            from parsers.wb_parser import WildberriesParser
+            wb = WildberriesParser(affiliate_id=config.WB_AFFILIATE_ID)
+            deals = wb.parse_deals(min_discount=config.MIN_DISCOUNT_PERCENT, limit=50)
             inserted = db.insert_products(deals)
             total_found += inserted
-            logger.info(f"[Scheduler] {mp.display_name}: {inserted} new products")
+            logger.info(f"[Scheduler] WB API fallback: {inserted} products")
         except Exception as e:
-            logger.error(f"[Scheduler] {mp.display_name} error: {e}")
-
-        try:
-            popular = parser.parse_popular(limit=config.MAX_PRODUCTS_PER_PARSE // 2)
-            inserted = db.insert_products(popular)
-            total_found += inserted
-            logger.info(f"[Scheduler] {mp.display_name} popular: {inserted} new products")
-        except Exception as e:
-            logger.error(f"[Scheduler] {mp.display_name} popular error: {e}")
+            logger.warning(f"[Scheduler] WB API fallback error: {e}")
 
     logger.info(f"[Scheduler] Total found: {total_found}")
     return total_found
