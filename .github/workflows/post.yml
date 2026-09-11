@@ -1,0 +1,43 @@
+name: Auto Post
+on:
+  schedule:
+    # Посты 4 раза в день: 09:00, 13:00, 17:00, 21:00 UTC+3
+    - cron: '0 6,10,14,18 * * *'
+  workflow_dispatch:
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download database
+        uses: actions/download-artifact@v4
+        with:
+          name: marketplace-db
+          path: data/
+        continue-on-error: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Post to channel
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          MIN_DISCOUNT_PERCENT: ${{ vars.MIN_DISCOUNT_PERCENT || '20' }}
+        run: python scripts/post_only.py
+
+      - name: Upload updated database
+        uses: actions/upload-artifact@v4
+        with:
+          name: marketplace-db
+          path: data/marketplace.db
+          retention-days: 30
+          if-no-files-found: ignore
