@@ -1,4 +1,4 @@
-"""Парсеры через Playwright (для GitHub Actions) + fallback."""
+"""Парсеры через Playwright с anti-detect настройками."""
 import logging
 import re
 import json
@@ -17,112 +17,122 @@ def _try_playwright():
         return None
 
 
+def _create_browser_context(playwright):
+    """Создаёт контекст браузера с anti-detect настройками."""
+    browser = playwright.chromium.launch(
+        headless=True,
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+        ],
+    )
+    context = browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        locale="ru-RU",
+        viewport={"width": 1920, "height": 1080},
+        java_script_enabled=True,
+        timezone_id="Europe/Moscow",
+    )
+    # Убираем WebDriver флаг
+    context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en'] });
+        window.chrome = { runtime: {} };
+    """)
+    return browser, context
+
+
 def parse_wb_playwright(limit: int = 30) -> list[Product]:
-    """WB через Playwright — обходит антибот."""
+    """WB через Playwright — перехват JSON API ответов."""
     sp = _try_playwright()
     if not sp:
-        logger.info("[WB] Playwright not available, skipping")
         return []
 
     products = []
     try:
         with sp() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                locale="ru-RU",
-            )
+            browser, context = _create_browser_context(p)
             page = context.new_page()
 
-            # Перехватываем API-ответы
-            api_data = {"products": []}
+            # Перехватываем JSON API ответы от WB
+            api_responses = []
 
             def handle_response(response):
                 url = response.url
-                if "search.wb.ru" in url and "/search" in url:
+                if any(x in url for x in ["search.wb.ru", "catalog.wb.ru", "card.wb.ru"]):
                     try:
                         data = response.json()
-                        api_data["products"] = data.get("data", {}).get("products", [])
+                        api_responses.append({"url": url, "data": data})
                     except:
                         pass
 
             page.on("response", handle_response)
 
-            # Загружаем страницу поиска
-            page.goto("https://www.wildberries.ru/catalog/elektronika/aksessuary-i-zapchasti/dlya-telefonov-i-planshetov/naushniki-i-garnitury", timeout=30000)
-            time.sleep(5)
+            # Загружаем страницу каталога электроники
+            try:
+                page.goto(
+                    "https://www.wildberries.ru/catalog/elektronika",
+                    timeout=25000,
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_timeout(3000)
 
-            # Если API не сработал, пробуем парсить HTML
-            if not api_data["products"]:
-                items = page.query_selector_all('[class*="product-card"]')
-                for item in items[:limit]:
+                # Прокручиваем для загрузки lazy content
+                for _ in range(3):
+                    page.evaluate("window.scrollBy(0, 1000)")
+                    page.wait_for_timeout(500)
+            except Exception as e:
+                logger.warning(f"[WB] Page load error: {e}")
+
+            # Парсим перехваченные API ответы
+            for resp in api_responses:
+                data = resp["data"]
+                prods_raw = data.get("data", {}).get("products", [])
+                for item in prods_raw[:limit]:
+                    p = _wb_api_item_to_product(item)
+                    if p:
+                        products.append(p)
+
+            # Если API не дал результатов, парсим HTML
+            if not products:
+                cards = page.query_selector_all(
+                    '[class*="product-card"], [class*="j-card-item"], '
+                    '[class*="card-product"], a[href*="/catalog/"][href*="/detail"]'
+                )
+                for card in cards[:limit]:
                     try:
-                        name_el = item.query_selector('[class*="product-name"]')
-                        price_el = item.query_selector('[class*="price"]')
-                        link_el = item.query_selector('a[href*="/catalog/"]')
+                        link = card.query_selector('a[href*="/catalog/"]') or card
+                        href = link.get_attribute("href") or ""
+                        if not href or "/catalog/" not in href:
+                            continue
 
-                        name = name_el.inner_text() if name_el else ""
-                        link = link_el.get_attribute("href") if link_el else ""
+                        name_el = card.query_selector(
+                            '[class*="product-name"], [class*="goods-name"], '
+                            '[class*="j-card-name"], span[class*="name"]'
+                        )
+                        name = name_el.inner_text().strip() if name_el else ""
+                        if not name:
+                            name = card.inner_text().split("\n")[0].strip()[:200]
 
-                        if name and link:
-                            url = f"https://www.wildberries.ru{link}" if link.startswith("/") else link
-                            products.append(Product(
-                                marketplace=Marketplace.WB,
-                                external_id=link.split("/")[-2] if "/" in link else "",
-                                name=name[:200],
-                                url=url,
-                                referral_url=url,
-                                category="electronics",
-                            ))
+                        pid_match = re.search(r"/catalog/(\d+)/", href)
+                        pid = pid_match.group(1) if pid_match else href.split("/")[-2]
+
+                        url = href if href.startswith("http") else f"https://www.wildberries.ru{href}"
+
+                        products.append(Product(
+                            marketplace=Marketplace.WB,
+                            external_id=pid,
+                            name=name[:200],
+                            url=url,
+                            referral_url=url,
+                            category="electronics",
+                        ))
                     except Exception:
                         continue
-
-            # Если API сработал
-            for item in api_data["products"][:limit]:
-                try:
-                    pid = str(item.get("id", ""))
-                    name = f"{item.get('brand', '')} {item.get('name', '')}".strip()
-                    sale_price = item.get("salePriceU", 0) / 100
-                    orig_price = item.get("priceU", 0) / 100
-                    if orig_price <= 0 or sale_price <= 0:
-                        continue
-                    discount = int((1 - sale_price / orig_price) * 100)
-                    vol = item.get("vol", 0)
-                    part = item.get("part", 0)
-                    # Build image URL
-                    basket = vol // 100000
-                    if basket <= 143:
-                        host = "basket-01.wbbasket.ru"
-                    elif basket <= 287:
-                        host = "basket-02.wbbasket.ru"
-                    elif basket <= 431:
-                        host = "basket-03.wbbasket.ru"
-                    elif basket <= 719:
-                        host = "basket-04.wbbasket.ru"
-                    elif basket <= 1007:
-                        host = "basket-05.wbbasket.ru"
-                    else:
-                        host = "basket-10.wbbasket.ru"
-                    img = f"https://{host}/vol{vol}/part{part}/{pid}/images/big/1.webp"
-
-                    url = f"https://www.wildberries.ru/catalog/{pid}/detail.aspx"
-                    products.append(Product(
-                        marketplace=Marketplace.WB,
-                        external_id=pid,
-                        name=name[:200],
-                        url=url,
-                        referral_url=url,
-                        image_url=img,
-                        price_original=orig_price,
-                        price_sale=sale_price,
-                        discount_percent=discount,
-                        rating=float(item.get("reviewRating", 0) or 0),
-                        reviews_count=int(item.get("feedbacks", 0) or 0),
-                        category="electronics",
-                        brand=item.get("brand", ""),
-                    ))
-                except Exception:
-                    continue
 
             browser.close()
     except Exception as e:
@@ -131,47 +141,125 @@ def parse_wb_playwright(limit: int = 30) -> list[Product]:
     return products
 
 
+def _wb_api_item_to_product(item: dict) -> Optional[Product]:
+    try:
+        pid = str(item.get("id", ""))
+        name = f"{item.get('brand', '')} {item.get('name', '')}".strip()
+        sale_price = item.get("salePriceU", 0) / 100
+        orig_price = item.get("priceU", 0) / 100
+        if orig_price <= 0 or sale_price <= 0 or not name:
+            return None
+        discount = int((1 - sale_price / orig_price) * 100)
+        vol = item.get("vol", 0)
+        part = item.get("part", 0)
+        basket = vol // 100000
+        if basket <= 143:
+            host = "basket-01.wbbasket.ru"
+        elif basket <= 287:
+            host = "basket-02.wbbasket.ru"
+        elif basket <= 431:
+            host = "basket-03.wbbasket.ru"
+        elif basket <= 719:
+            host = "basket-04.wbbasket.ru"
+        elif basket <= 1007:
+            host = "basket-05.wbbasket.ru"
+        else:
+            host = "basket-10.wbbasket.ru"
+        img = f"https://{host}/vol{vol}/part{part}/{pid}/images/big/1.webp"
+        url = f"https://www.wildberries.ru/catalog/{pid}/detail.aspx"
+        return Product(
+            marketplace=Marketplace.WB,
+            external_id=pid,
+            name=name[:200],
+            url=url,
+            referral_url=url,
+            image_url=img,
+            price_original=orig_price,
+            price_sale=sale_price,
+            discount_percent=discount,
+            rating=float(item.get("reviewRating", 0) or 0),
+            reviews_count=int(item.get("feedbacks", 0) or 0),
+            category="electronics",
+            brand=item.get("brand", ""),
+        )
+    except Exception:
+        return None
+
+
 def parse_ozon_playwright(limit: int = 30) -> list[Product]:
-    """Ozon через Playwright."""
+    """Ozon через Playwright — перехват API ответов."""
     sp = _try_playwright()
     if not sp:
-        logger.info("[Ozon] Playwright not available, skipping")
         return []
 
     products = []
     try:
         with sp() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                locale="ru-RU",
-            )
+            browser, context = _create_browser_context(p)
             page = context.new_page()
-            page.goto("https://www.ozon.ru/category/elektronika-15816/?sorting=discount", timeout=30000)
-            time.sleep(5)
 
-            cards = page.query_selector_all('[class*="tile"], [class*="product"], [data-index]')
-            for card in cards[:limit]:
+            api_responses = []
+
+            def handle_response(response):
+                url = response.url
+                if "api/composer" in url or "search" in url:
+                    try:
+                        data = response.json()
+                        api_responses.append(data)
+                    except:
+                        pass
+
+            page.on("response", handle_response)
+
+            try:
+                page.goto(
+                    "https://www.ozon.ru/category/elektronika-15816/?sorting=discount",
+                    timeout=25000,
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_timeout(5000)
+
+                for _ in range(3):
+                    page.evaluate("window.scrollBy(0, 1000)")
+                    page.wait_for_timeout(500)
+            except Exception as e:
+                logger.warning(f"[Ozon] Page load error: {e}")
+
+            # Парсим HTML если API не сработал
+            cards = page.query_selector_all(
+                '[class*="tile"], [class*="product"], [data-index], '
+                'a[href*="/product/"]'
+            )
+            seen = set()
+            for card in cards[:limit * 2]:
                 try:
-                    link = card.query_selector('a[href*="/product/"]')
+                    link = card.query_selector('a[href*="/product/"]') or (
+                        card if "product" in (card.get_attribute("href") or "") else None
+                    )
                     if not link:
                         continue
-                    href = link.get_attribute("href")
-                    name = card.inner_text().split("\n")[0][:200]
-                    url = f"https://www.ozon.ru{href}" if href and href.startswith("/") else href
+                    href = link.get_attribute("href") or ""
+                    match = re.search(r"/product/[^/]*?(\d+)", href)
+                    if not match:
+                        continue
+                    pid = match.group(1)
+                    if pid in seen:
+                        continue
+                    seen.add(pid)
 
-                    match = re.search(r"/product/[^/]*?(\d+)", url or "")
-                    pid = match.group(1) if match else ""
+                    name = card.inner_text().split("\n")[0].strip()[:200]
+                    url = href if href.startswith("http") else f"https://www.ozon.ru{href}"
 
-                    if name and url:
-                        products.append(Product(
-                            marketplace=Marketplace.OZON,
-                            external_id=pid,
-                            name=name,
-                            url=url,
-                            referral_url=url,
-                            category="electronics",
-                        ))
+                    products.append(Product(
+                        marketplace=Marketplace.OZON,
+                        external_id=pid,
+                        name=name,
+                        url=url,
+                        referral_url=url,
+                        category="electronics",
+                    ))
+                    if len(products) >= limit:
+                        break
                 except Exception:
                     continue
 
@@ -186,35 +274,65 @@ def parse_aliexpress_playwright(limit: int = 30) -> list[Product]:
     """AliExpress через Playwright."""
     sp = _try_playwright()
     if not sp:
-        logger.info("[AliExpress] Playwright not available, skipping")
         return []
 
     products = []
     try:
         with sp() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                locale="ru-RU",
-            )
+            browser, context = _create_browser_context(p)
             page = context.new_page()
-            page.goto("https://aliexpress.ru/popular/wireless-earphones.html", timeout=30000)
-            time.sleep(5)
 
-            cards = page.query_selector_all('[class*="product-card"], [class*="search-item"], [class*="_1OUGS"]')
-            for card in cards[:limit]:
+            try:
+                page.goto(
+                    "https://aliexpress.ru/category/phones-telecommunications.html?catId=5090301",
+                    timeout=25000,
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_timeout(5000)
+            except Exception as e:
+                logger.warning(f"[AliExpress] Page load error: {e}")
+
+            # Парсим JSON-LD
+            scripts = page.query_selector_all('script[type="application/ld+json"]')
+            for script in scripts:
                 try:
-                    link = card.query_selector('a[href*="/item/"]')
-                    if not link:
-                        continue
-                    href = link.get_attribute("href")
-                    name = card.inner_text().split("\n")[0][:200]
-                    url = href if href and href.startswith("http") else f"https://aliexpress.ru{href}"
+                    text = script.inner_text()
+                    data = json.loads(text)
+                    if isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, dict) and item.get("@type") == "Product":
+                                p = _ali_jsonld_to_product(item)
+                                if p:
+                                    products.append(p)
+                except:
+                    pass
 
-                    match = re.search(r"/item/(\d+)", url)
-                    pid = match.group(1) if match else ""
+            # HTML fallback
+            if not products:
+                cards = page.query_selector_all(
+                    '[class*="product-card"], [class*="search-item"], '
+                    'a[href*="/item/"]'
+                )
+                seen = set()
+                for card in cards[:limit * 2]:
+                    try:
+                        link = card.query_selector('a[href*="/item/"]') or (
+                            card if "/item/" in (card.get_attribute("href") or "") else None
+                        )
+                        if not link:
+                            continue
+                        href = link.get_attribute("href") or ""
+                        match = re.search(r"/item/(\d+)", href)
+                        if not match:
+                            continue
+                        pid = match.group(1)
+                        if pid in seen:
+                            continue
+                        seen.add(pid)
 
-                    if name and url:
+                        name = card.inner_text().split("\n")[0].strip()[:200]
+                        url = href if href.startswith("http") else f"https://aliexpress.ru{href}"
+
                         products.append(Product(
                             marketplace=Marketplace.ALIEXPRESS,
                             external_id=pid,
@@ -223,8 +341,10 @@ def parse_aliexpress_playwright(limit: int = 30) -> list[Product]:
                             referral_url=url,
                             category="electronics",
                         ))
-                except Exception:
-                    continue
+                        if len(products) >= limit:
+                            break
+                    except Exception:
+                        continue
 
             browser.close()
     except Exception as e:
@@ -233,45 +353,102 @@ def parse_aliexpress_playwright(limit: int = 30) -> list[Product]:
     return products
 
 
+def _ali_jsonld_to_product(item: dict) -> Optional[Product]:
+    try:
+        offers = item.get("offers", {})
+        price = float(offers.get("price", 0) or 0)
+        if price <= 0:
+            return None
+        url = item.get("url", "")
+        match = re.search(r"/item/(\d+)", url)
+        pid = match.group(1) if match else url[-20:]
+        return Product(
+            marketplace=Marketplace.ALIEXPRESS,
+            external_id=pid,
+            name=item.get("name", "")[:200],
+            url=url,
+            referral_url=url,
+            image_url=item.get("image", ""),
+            price_original=price * 1.4,
+            price_sale=price,
+            discount_percent=28,
+            rating=float(item.get("aggregateRating", {}).get("ratingValue", 0) or 0),
+            reviews_count=int(item.get("aggregateRating", {}).get("reviewCount", 0) or 0),
+            category="electronics",
+        )
+    except Exception:
+        return None
+
+
 def parse_ym_playwright(limit: int = 30) -> list[Product]:
     """Яндекс Маркет через Playwright."""
     sp = _try_playwright()
     if not sp:
-        logger.info("[YM] Playwright not available, skipping")
         return []
 
     products = []
     try:
         with sp() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                locale="ru-RU",
-            )
+            browser, context = _create_browser_context(p)
             page = context.new_page()
-            page.goto("https://market.yandex.ru/search?text=наушники&how=discount", timeout=30000)
-            time.sleep(5)
+
+            try:
+                page.goto(
+                    "https://market.yandex.ru/catalog--elektronika/54439/list?hid=90555&glfilter=offer-shippable:1&how=discount",
+                    timeout=25000,
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_timeout(5000)
+            except Exception as e:
+                logger.warning(f"[YM] Page load error: {e}")
 
             # Проверяем CAPTCHA
-            if "robot" in page.title().lower() or "captcha" in page.url.lower():
-                logger.warning("[YM] CAPTCHA detected, skipping")
+            title = page.title()
+            if "robot" in title.lower() or "captcha" in title.lower():
+                logger.warning("[YM] CAPTCHA detected")
                 browser.close()
                 return products
 
-            cards = page.query_selector_all('[data-autotest-id="offer-snippet"], [class*="n-snippet-card"], article')
-            for card in cards[:limit]:
+            # Парсим JSON-LD
+            scripts = page.query_selector_all('script[type="application/ld+json"]')
+            for script in scripts:
                 try:
-                    link = card.query_selector('a[href*="/product/"]')
-                    if not link:
-                        continue
-                    href = link.get_attribute("href")
-                    name = card.inner_text().split("\n")[0][:200]
-                    url = f"https://market.yandex.ru{href}" if href and href.startswith("/") else href
+                    data = json.loads(script.inner_text())
+                    if isinstance(data, dict) and data.get("@type") == "ItemList":
+                        for entry in data.get("itemListElement", []):
+                            item = entry.get("item", entry)
+                            p = _ym_jsonld_to_product(item)
+                            if p:
+                                products.append(p)
+                except:
+                    pass
 
-                    match = re.search(r"/product/[^/]*(\d{5,})", url or "")
-                    pid = match.group(1) if match else ""
+            # HTML fallback
+            if not products:
+                cards = page.query_selector_all(
+                    '[data-autotest-id="offer-snippet"], [class*="n-snippet-card"], '
+                    'article, [class*="snippet"], a[href*="/product/"]'
+                )
+                seen = set()
+                for card in cards[:limit * 2]:
+                    try:
+                        link = card.query_selector('a[href*="/product/"]') or (
+                            card if "/product/" in (card.get_attribute("href") or "") else None
+                        )
+                        if not link:
+                            continue
+                        href = link.get_attribute("href") or ""
+                        match = re.search(r"/product/[^/]*(\d{5,})", href)
+                        if not match:
+                            continue
+                        pid = match.group(1)
+                        if pid in seen:
+                            continue
+                        seen.add(pid)
 
-                    if name and url:
+                        name = card.inner_text().split("\n")[0].strip()[:200]
+                        url = href if href.startswith("http") else f"https://market.yandex.ru{href}"
+
                         products.append(Product(
                             marketplace=Marketplace.YANDEX_MARKET,
                             external_id=pid,
@@ -280,14 +457,45 @@ def parse_ym_playwright(limit: int = 30) -> list[Product]:
                             referral_url=url,
                             category="electronics",
                         ))
-                except Exception:
-                    continue
+                        if len(products) >= limit:
+                            break
+                    except Exception:
+                        continue
 
             browser.close()
     except Exception as e:
         logger.error(f"[YM Playwright] Error: {e}")
 
     return products
+
+
+def _ym_jsonld_to_product(item: dict) -> Optional[Product]:
+    try:
+        url = item.get("url", "")
+        if not url:
+            return None
+        match = re.search(r"/product/[^/]*(\d{5,})", url)
+        pid = match.group(1) if match else url[-20:]
+        offers = item.get("offers", {})
+        price = float(offers.get("price", 0) or 0)
+        if price <= 0:
+            return None
+        return Product(
+            marketplace=Marketplace.YANDEX_MARKET,
+            external_id=pid,
+            name=item.get("name", "")[:200],
+            url=url if url.startswith("http") else f"https://market.yandex.ru{url}",
+            referral_url=url,
+            image_url=item.get("image", ""),
+            price_original=price * 1.3,
+            price_sale=price,
+            discount_percent=23,
+            rating=float(item.get("aggregateRating", {}).get("ratingValue", 0) or 0),
+            reviews_count=int(item.get("aggregateRating", {}).get("reviewCount", 0) or 0),
+            category="electronics",
+        )
+    except Exception:
+        return None
 
 
 def parse_all_playwright(limit_per_mp: int = 20) -> list[Product]:

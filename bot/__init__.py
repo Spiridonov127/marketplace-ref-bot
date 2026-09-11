@@ -48,7 +48,7 @@ def create_bot(db: Database) -> telebot.TeleBot:
             "/parse \u2014 Запустить парсинг\n\n"
             "<b>\U0001F50D Поиск:</b>\n"
             "/search <запрос> \u2014 Найти товар\n\n"
-            "<b>\U2699\ufe0f Настройки:</b>\n"
+            "<b>\u2699\ufe0f Настройки:</b>\n"
             "/setposts <N> \u2014 Постов в день\n"
             "/setdiscount <N> \u2014 Мин. скидка (%)"
         )
