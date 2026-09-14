@@ -1,0 +1,69 @@
+name: Telegram Query (Dzen)
+on:
+  repository_dispatch:
+    types: [telegram_query]
+
+jobs:
+  handle_query:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download database
+        uses: actions/download-artifact@v4
+        with:
+          name: marketplace-db
+          path: data/
+        continue-on-error: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Restore auth cookies
+        env:
+          DZEN_COOKIES_B64: ${{ secrets.DZEN_COOKIES_B64 }}
+          DISTRIBUTION_COOKIES_B64: ${{ secrets.DISTRIBUTION_COOKIES_B64 }}
+        run: |
+          mkdir -p data
+          if [ -n "$DZEN_COOKIES_B64" ]; then
+            echo "$DZEN_COOKIES_B64" | base64 -d > data/dzen_cookies.json
+          else
+            echo "::warning::DZEN_COOKIES_B64 не задан — постинг в Дзен не сработает"
+          fi
+          if [ -n "$DISTRIBUTION_COOKIES_B64" ]; then
+            echo "$DISTRIBUTION_COOKIES_B64" | base64 -d > data/distribution_cookies.json
+          else
+            echo "::warning::DISTRIBUTION_COOKIES_B64 не задан — получение erid не сработает"
+          fi
+
+      - name: Handle Telegram query and post to Dzen
+        env:
+          QUERY: ${{ github.event.client_payload.query }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN_USER_IDS: ${{ secrets.ADMIN_USER_IDS }}
+          YANDEX_DISTRIBUTION_PARTNER_ID: ${{ secrets.YANDEX_DISTRIBUTION_PARTNER_ID }}
+          ORD_TOKEN: ${{ secrets.ORD_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          DZEN_DRAFT_URL: ${{ secrets.DZEN_DRAFT_URL }}
+          DZEN_COOKIES_PATH: data/dzen_cookies.json
+          DISTRIBUTION_COOKIES_PATH: data/distribution_cookies.json
+          MIN_DISCOUNT_PERCENT: ${{ vars.MIN_DISCOUNT_PERCENT || '20' }}
+        run: python scripts/run_dispatch_query.py
+
+      - name: Upload updated database
+        uses: actions/upload-artifact@v4
+        with:
+          name: marketplace-db
+          path: data/marketplace.db
+          retention-days: 30
+          if-no-files-found: ignore
