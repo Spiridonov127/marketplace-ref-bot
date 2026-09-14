@@ -1,4 +1,4 @@
-name: Auto Post
+name: Auto Post (Dzen)
 on:
   # schedule:
   #   - cron: '0 6,10,14,18 * * *'
@@ -24,12 +24,42 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install playwright
+          playwright install --with-deps chromium
 
-      - name: Post to channel
+      - name: Restore auth cookies
+        env:
+          DZEN_COOKIES_B64: ${{ secrets.DZEN_COOKIES_B64 }}
+          DISTRIBUTION_COOKIES_B64: ${{ secrets.DISTRIBUTION_COOKIES_B64 }}
+        run: |
+          mkdir -p data
+          # Сами файлы cookies никогда не коммитятся в репозиторий — только
+          # их base64 в секретах GitHub. Без этого шага и dzen_cookies.json,
+          # и distribution_cookies.json просто не существуют в CI, и
+          # post_only.py упадёт на "Cookies не найдены" (это баг, который
+          # был в workflow ещё до появления erid — DZEN_COOKIES_PATH был
+          # объявлен, а сам файл никто не создавал).
+          if [ -n "$DZEN_COOKIES_B64" ]; then
+            echo "$DZEN_COOKIES_B64" | base64 -d > data/dzen_cookies.json
+          else
+            echo "::warning::DZEN_COOKIES_B64 не задан — постинг в Дзен не сработает"
+          fi
+          if [ -n "$DISTRIBUTION_COOKIES_B64" ]; then
+            echo "$DISTRIBUTION_COOKIES_B64" | base64 -d > data/distribution_cookies.json
+          else
+            echo "::warning::DISTRIBUTION_COOKIES_B64 не задан — получение erid не сработает"
+          fi
+
+      - name: Post to Dzen
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          ADMIN_USER_IDS: ${{ secrets.ADMIN_USER_IDS }}
+          YANDEX_DISTRIBUTION_PARTNER_ID: ${{ secrets.YANDEX_DISTRIBUTION_PARTNER_ID }}
+          ORD_TOKEN: ${{ secrets.ORD_TOKEN }}
+          DZEN_COOKIES_PATH: data/dzen_cookies.json
+          DISTRIBUTION_COOKIES_PATH: data/distribution_cookies.json
           MIN_DISCOUNT_PERCENT: ${{ vars.MIN_DISCOUNT_PERCENT || '20' }}
         run: python scripts/post_only.py
 
