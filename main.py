@@ -1,13 +1,22 @@
-"""Точка входа: Яндекс Маркет → Яндекс Дзен."""
+"""Точка входа: Яндекс Маркет → Яндекс Дзен.
+
+По просьбе пользователя автоматических постов по расписанию больше нет —
+никакого фонового парсинга/постинга/дайджеста. Единственный способ что-то
+опубликовать — нажать /start в Telegram, ответить на вопрос "о чём хотите
+написать" текстом с категорией, после чего бот сам ищет топ-5 на Яндекс
+Маркете, генерирует статью и публикует в Дзен, а затем "отключается" до
+следующего /start. Код планировщика
+(scheduler.setup_schedule/run_scheduler/run_parse_cycle/run_dzen_post_cycle/
+run_digest) не удалён и по-прежнему рабочий — на случай, если расписание
+понадобится снова, — но здесь больше не запускается.
+"""
 import logging
 import os
-import threading
 import time
 
 from config import config
 from database import Database
 from bot import create_bot
-from scheduler import setup_schedule, run_parse_cycle, run_dzen_post_cycle, run_scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,7 +37,7 @@ def ensure_dirs():
 def main():
     ensure_dirs()
     logger.info("=" * 50)
-    logger.info("YM → Dzen Bot starting...")
+    logger.info("YM → Dzen Bot starting (только по /start, без расписания)...")
     logger.info("=" * 50)
 
     if not config.is_configured:
@@ -41,33 +50,26 @@ def main():
     db = Database(config.DB_PATH)
     bot = create_bot(db)
 
-    # Первый парсинг
-    logger.info("[Startup] Initial parse...")
-    try:
-        count = run_parse_cycle(db)
-        logger.info(f"[Startup] Parsed {count} products")
-    except Exception as e:
-        logger.error(f"[Startup] Parse error: {e}")
-
-    # Настройка расписания
-    setup_schedule(db, bot)
-
-    # Поток планировщика
-    def scheduler_loop():
-        while True:
-            try:
-                run_scheduler()
-            except Exception as e:
-                logger.error(f"[Scheduler] Error: {e}")
-            time.sleep(60)
-
-    scheduler_thread = threading.Thread(target=scheduler_loop, daemon=True)
-    scheduler_thread.start()
-    logger.info("[Startup] Scheduler started")
-
-    # Запуск бота
+    # Запуск бота — единственный источник задач теперь /start в Telegram,
+    # никакого фонового парсинга/постинга/дайджеста по таймеру.
+    #
+    # bot.infinity_polling() у pyTelegramBotAPI в теории сам должен
+    # переживать сетевые обрывы, но на практике при разрыве сети ("Network
+    # is unreachable") он всё равно иногда полностью завершается с
+    # исключением — после чего процесс main.py просто умирал, и бот переставал
+    # отвечать на /start до тех пор, пока кто-то вручную не перезапустит
+    # main.py. Оборачиваем вызов в свой собственный бесконечный цикл с
+    # перезапуском, чтобы разовый сбой сети не убивал бота насовсем.
     logger.info("[Startup] Bot started")
-    bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            logger.error(f"[Startup] Опрос Telegram упал с ошибкой: {e}")
+        else:
+            logger.warning("[Startup] Опрос Telegram завершился без ошибки (неожиданно)")
+        logger.info("[Startup] Перезапускаю опрос Telegram через 15 секунд...")
+        time.sleep(15)
 
 
 if __name__ == "__main__":

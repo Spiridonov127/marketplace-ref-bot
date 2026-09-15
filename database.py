@@ -119,6 +119,21 @@ class Database:
                 pass
         return count
 
+    def insert_products_return_ids(self, products: list[Product]) -> list[Optional[int]]:
+        """Как insert_products(), но возвращает id вставленных/обновлённых строк
+        в том же порядке, что и products — нужно, когда сразу после вставки
+        товар должен быть помечен опубликованным (mark_posted), а не заново
+        искаться в базе отдельным запросом (например, при постинге по
+        произвольному запросу из Telegram — см. scheduler.run_category_post_cycle).
+        """
+        ids: list[Optional[int]] = []
+        for p in products:
+            try:
+                ids.append(self.insert_product(p))
+            except sqlite3.IntegrityError:
+                ids.append(None)
+        return ids
+
     def get_unposted_products(self, limit: int = 10, min_discount: int = 0) -> list[Product]:
         with self._cursor() as cur:
             cur.execute("""

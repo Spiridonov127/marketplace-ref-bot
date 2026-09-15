@@ -22,16 +22,12 @@ jobs:
           pip install playwright
           playwright install --with-deps chromium
 
-      - name: Parse marketplaces
+      - name: Parse Yandex Market
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          ALIEXPRESS_AFFILIATE_ID: ${{ secrets.ALIEXPRESS_AFFILIATE_ID }}
-          ALIEXPRESS_APP_KEY: ${{ secrets.ALIEXPRESS_APP_KEY }}
-          GDESLON_AFFILIATE_ID: ${{ secrets.GDESLON_AFFILIATE_ID }}
-          GDESLON_WB_CAMPAIGN_ID: ${{ secrets.GDESLON_WB_CAMPAIGN_ID }}
-          GDESLON_OZON_CAMPAIGN_ID: ${{ secrets.GDESLON_OZON_CAMPAIGN_ID }}
-          GDESLON_YM_CAMPAIGN_ID: ${{ secrets.GDESLON_YM_CAMPAIGN_ID }}
+          ADMIN_USER_IDS: ${{ secrets.ADMIN_USER_IDS }}
+          YANDEX_DISTRIBUTION_PARTNER_ID: ${{ secrets.YANDEX_DISTRIBUTION_PARTNER_ID }}
+          ORD_TOKEN: ${{ secrets.ORD_TOKEN }}
           MIN_DISCOUNT_PERCENT: ${{ vars.MIN_DISCOUNT_PERCENT || '20' }}
           MAX_PRODUCTS_PER_PARSE: ${{ vars.MAX_PRODUCTS_PER_PARSE || '50' }}
         run: python scripts/parse_only.py

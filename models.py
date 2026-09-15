@@ -6,36 +6,21 @@ from typing import Optional
 
 
 class Marketplace(str, Enum):
-    WB = "wb"
-    OZON = "ozon"
-    ALIEXPRESS = "aliexpress"
     YANDEX_MARKET = "yandex_market"
 
     @property
     def display_name(self) -> str:
-        names = {
-            "wb": "Wildberries",
-            "ozon": "Ozon",
-            "aliexpress": "AliExpress",
-            "yandex_market": "Яндекс Маркет",
-        }
-        return names[self.value]
+        return "Яндекс Маркет"
 
     @property
     def emoji(self) -> str:
-        emojis = {
-            "wb": "\U0001F7E5",
-            "ozon": "\U0001F7E3",
-            "aliexpress": "\U0001F7E2",
-            "yandex_market": "\U0001F7E1",
-        }
-        return emojis[self.value]
+        return "\U0001F7E1"
 
 
 @dataclass
 class Product:
     id: Optional[int] = None
-    marketplace: Marketplace = Marketplace.WB
+    marketplace: Marketplace = Marketplace.YANDEX_MARKET
     external_id: str = ""
     name: str = ""
     url: str = ""

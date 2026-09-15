@@ -2,13 +2,17 @@ name = "marketplace-ref-bot-relay"
 main = "src/worker.js"
 compatibility_date = "2024-09-01"
 
-# ID заполнится автоматически после команды:
-#   wrangler kv:namespace create AWAITING_KV
-# (см. cloudflare-worker/SETUP.md, шаг 3) — впишите полученный id сюда
-# вместо ЗАМЕНИТЕ_НА_ID.
+# Account ID — не секрет, просто идентификатор аккаунта Cloudflare. Прописан
+# здесь, чтобы wrangler не пытался определять его сам (для автоопределения
+# токену нужно право Account Settings: Read, которого может не быть).
+account_id = "ea15daf93d43cb52afcd8e987888d960"
+
+# Хранилище состояния "чат ждёт запрос после /start" — заменяет собой
+# множество awaiting_query в памяти Python-бота. Создано командой
+# `wrangler kv namespace create AWAITING_KV`.
 [[kv_namespaces]]
 binding = "AWAITING_KV"
-id = "ЗАМЕНИТЕ_НА_ID"
+id = "8056b2c888614bc99ab73fe33a4c30b0"
 
 # Секреты (TELEGRAM_BOT_TOKEN, GITHUB_TOKEN, GITHUB_REPO, ADMIN_USER_IDS)
 # сюда НЕ прописываются — они задаются отдельно через
