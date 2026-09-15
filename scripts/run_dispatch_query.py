@@ -76,7 +76,7 @@ def main():
     db = Database(config.DB_PATH)
 
     try:
-        success = run_post_cycle_for_query(db, query)
+        success, reason = run_post_cycle_for_query(db, query)
     except Exception as e:
         logger.error(f"[Dispatch] Ошибка при обработке запроса {query!r}: {e}")
         _send_telegram(chat_id, f"❌ Ошибка: {e}\n\n{_OFF_NOTICE}")
@@ -94,9 +94,8 @@ def main():
         _send_telegram(
             chat_id,
             f"⚠️ Не получилось опубликовать по запросу «{query}»: "
-            f"либо ничего не нашлось на Яндекс Маркете, либо не удалось "
-            f"получить erid через ОРД, либо ошибка публикации в Дзен. "
-            f"Подробности — в логе запуска workflow на GitHub.\n\n{_OFF_NOTICE}",
+            f"{reason}.\n\nПодробности — в логе запуска workflow на "
+            f"GitHub.\n\n{_OFF_NOTICE}",
         )
 
 

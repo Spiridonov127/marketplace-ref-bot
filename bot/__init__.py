@@ -134,7 +134,7 @@ def create_bot(db: Database) -> telebot.TeleBot:
         """
         try:
             from scheduler import run_post_cycle_for_query
-            success = run_post_cycle_for_query(db, query)
+            success, reason = run_post_cycle_for_query(db, query)
             if success:
                 bot.send_message(
                     chat_id,
@@ -145,9 +145,7 @@ def create_bot(db: Database) -> telebot.TeleBot:
                 bot.send_message(
                     chat_id,
                     f"\u26a0\ufe0f Не получилось опубликовать по запросу «{query}»: "
-                    f"либо ничего не нашлось на Яндекс Маркете, либо не удалось "
-                    f"получить erid через ОРД, либо ошибка публикации в Дзен. "
-                    f"Подробности \u2014 в bot.log.\n\n{_OFF_NOTICE}",
+                    f"{reason}.\n\nПодробности \u2014 в bot.log.\n\n{_OFF_NOTICE}",
                 )
         except Exception as e:
             logger.error(f"[Bot] Category post error for {query!r}: {e}")

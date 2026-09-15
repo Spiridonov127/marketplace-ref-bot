@@ -2,6 +2,7 @@
 import html
 import logging
 import re
+import time
 
 import telebot
 import schedule
@@ -177,7 +178,103 @@ def run_dzen_post_cycle(db: Database) -> bool:
         return False
 
 
-def run_category_post_cycle(db: Database, query: str, top_n: int = 5) -> bool:
+# Сколько раз повторять каждый этап, прежде чем сдаться. Разные этапы
+# ломаются по-разному, поэтому и повторов у них разное количество:
+#
+#  - поиск на Маркете: Playwright иногда возвращает пустой список из-за
+#    таймаута или не прогрузившейся страницы, и отличить это от честного
+#    "ничего не нашлось" изнутри нельзя — поэтому один повтор оправдан;
+#  - erid: КАЖДЫЙ УСПЕШНЫЙ вызов кабинета Дистрибуции регистрирует новый
+#    рекламный креатив в ОРД (см. distribution_erid). Повторяем только после
+#    неудачи (когда регистрации, как правило, не произошло) и максимально
+#    скупо, чтобы не наплодить лишних регистраций;
+#  - публикация в Дзен: самый капризный этап (модалка, сеть, ре-рендеры
+#    редактора) и при этом полностью безвредный для повтора — статья с уже
+#    полученным erid просто отправляется заново, новый erid не запрашивается.
+_SEARCH_ATTEMPTS = 2
+_ERID_ATTEMPTS = 2
+_POST_ATTEMPTS = 3
+_RETRY_PAUSE_SECONDS = 10
+
+
+def _search_with_retries(search_query: str, limit: int) -> list:
+    from parsers.playwright_parsers import parse_ym_search_playwright
+
+    for attempt in range(1, _SEARCH_ATTEMPTS + 1):
+        try:
+            found = parse_ym_search_playwright(search_query, limit=limit)
+        except Exception as e:
+            logger.warning(
+                f"[Scheduler] Поиск «{search_query}» упал "
+                f"(попытка {attempt}/{_SEARCH_ATTEMPTS}): {e}"
+            )
+            found = None
+        if found:
+            return found
+        if attempt < _SEARCH_ATTEMPTS:
+            logger.info(
+                f"[Scheduler] По «{search_query}» пусто — повтор через "
+                f"{_RETRY_PAUSE_SECONDS} с"
+            )
+            time.sleep(_RETRY_PAUSE_SECONDS)
+    return []
+
+
+def _publish_with_retries(
+    db: Database, products: list, title: str, body_html: str
+) -> tuple:
+    """Маркировка + публикация с повторами. Возвращает (успех, причина).
+
+    Причина — короткий человеческий текст для сообщения в Telegram: раньше
+    бот на любую неудачу отвечал одинаковым "либо не нашлось, либо erid, либо
+    Дзен", и понять, что чинить, было нельзя.
+    """
+    from dzen_poster import post_to_dzen
+
+    marked_body = None
+    for attempt in range(1, _ERID_ATTEMPTS + 1):
+        # При неудаче _apply_ad_marking ничего не меняет ни в products, ни в
+        # body_html (выходит раньше мутаций), поэтому повтор безопасен и
+        # каждый раз стартует с исходного текста статьи.
+        marked_body = _apply_ad_marking(products, title, body_html)
+        if marked_body:
+            break
+        logger.warning(
+            f"[Scheduler] erid не получен (попытка {attempt}/{_ERID_ATTEMPTS})"
+        )
+        if attempt < _ERID_ATTEMPTS:
+            time.sleep(_RETRY_PAUSE_SECONDS)
+
+    if not marked_body:
+        return False, (
+            "не удалось получить erid в кабинете Яндекс Дистрибуции — "
+            "публиковать рекламу без маркировки запрещено законом, поэтому "
+            "пост отменён. Обычно причина в протухших куках Дистрибуции"
+        )
+
+    for attempt in range(1, _POST_ATTEMPTS + 1):
+        if post_to_dzen(title, marked_body):
+            posted_ids = [p.id for p in products if p.id]
+            if posted_ids:
+                db.mark_posted(posted_ids)
+            if attempt > 1:
+                logger.info(f"[Scheduler] Опубликовано с {attempt}-й попытки")
+            return True, ""
+        logger.warning(
+            f"[Scheduler] Дзен не принял статью "
+            f"(попытка {attempt}/{_POST_ATTEMPTS})"
+        )
+        if attempt < _POST_ATTEMPTS:
+            time.sleep(_RETRY_PAUSE_SECONDS)
+
+    return False, (
+        f"Дзен не принял статью после {_POST_ATTEMPTS} попыток. "
+        f"erid при этом получен, так что дело в самой публикации — "
+        f"чаще всего в протухших куках Дзена"
+    )
+
+
+def run_category_post_cycle(db: Database, query: str, top_n: int = 5) -> tuple:
     """По произвольному запросу/категории от пользователя (например, из
     Telegram) ищет товары на Яндекс Маркете, берёт топ-N по популярности
     (рейтинг → число отзывов → скидка), генерирует статью и публикует её в
@@ -186,21 +283,22 @@ def run_category_post_cycle(db: Database, query: str, top_n: int = 5) -> bool:
     Полный аналог run_dzen_post_cycle, но источник товаров — не очередь
     неопубликованных из БД, а свежий поиск по тексту query прямо сейчас.
     """
-    from dzen_poster import post_to_dzen
-    from parsers.playwright_parsers import parse_ym_search_playwright
-
     query = (query or "").strip()
     if not query:
-        return False
+        return False, "пустой запрос"
 
     search_query = clean_search_query(query)
     logger.info(f"[Scheduler] Поиск подборки по запросу «{query}» (ищу: «{search_query}»)...")
-    found = parse_ym_search_playwright(
+    found = _search_with_retries(
         search_query, limit=max(config.MAX_PRODUCTS_PER_PARSE, top_n)
     )
     if not found:
         logger.warning(f"[Scheduler] По запросу «{search_query}» ничего не найдено")
-        return False
+        return False, (
+            f"на Яндекс Маркете ничего не нашлось по запросу «{search_query}» "
+            f"(проверено {_SEARCH_ATTEMPTS} раза). Попробуйте другую "
+            f"формулировку"
+        )
 
     # "Популярное" — сортируем по рейтингу и числу отзывов, скидка вторична
     # (в отличие от run_dzen_post_cycle/run_digest, где во главе угла скидка).
@@ -220,28 +318,18 @@ def run_category_post_cycle(db: Database, query: str, top_n: int = 5) -> bool:
 
     title, body_html = generate_dzen_article(top, reviews_by_product)
 
-    # Обязательная по закону маркировка рекламы (erid) — публикация без неё
-    # отменяется, см. _apply_ad_marking.
-    marked_body_html = _apply_ad_marking(top, title, body_html)
-    if marked_body_html is None:
-        logger.error(f"[Scheduler] Публикация по запросу «{query}» отменена — не удалось получить erid")
-        return False
-    body_html = marked_body_html
-
-    success = post_to_dzen(title, body_html)
-
-    if success:
-        posted_ids = [p.id for p in top if p.id]
-        if posted_ids:
-            db.mark_posted(posted_ids)
+    # Обязательная по закону маркировка рекламы (erid) и сама публикация —
+    # оба этапа с повторами, см. _publish_with_retries.
+    ok, reason = _publish_with_retries(db, top, title, body_html)
+    if ok:
         logger.info(f"[Scheduler] Опубликовано по запросу «{query}»: {len(top)} товаров")
-        return True
+        return True, ""
 
-    logger.warning(f"[Scheduler] Публикация по запросу «{query}» не удалась (ошибка Дзена)")
-    return False
+    logger.warning(f"[Scheduler] Подборка по запросу «{query}» не опубликована: {reason}")
+    return False, reason
 
 
-def run_single_product_post_cycle(db: Database, query: str) -> bool:
+def run_single_product_post_cycle(db: Database, query: str) -> tuple:
     """Обычный запрос ("шапка", "напиши про кофемашину") — статья-обзор об
     ОДНОМ товаре: живой текст, фото, ссылка. Без отзывов покупателей, без
     рейтингов и без списков плюсов/минусов — они показываются только в режиме
@@ -251,21 +339,22 @@ def run_single_product_post_cycle(db: Database, query: str) -> bool:
     Маркировка рекламы (erid) обязательна точно так же, как в подборке: без
     неё публикация отменяется.
     """
-    from dzen_poster import post_to_dzen
-    from parsers.playwright_parsers import parse_ym_search_playwright
-
     query = (query or "").strip()
     if not query:
-        return False
+        return False, "пустой запрос"
 
     search_query = clean_search_query(query)
     logger.info(f"[Scheduler] Статья по запросу «{query}» (ищу: «{search_query}»)...")
-    found = parse_ym_search_playwright(
+    found = _search_with_retries(
         search_query, limit=max(config.MAX_PRODUCTS_PER_PARSE, 10)
     )
     if not found:
         logger.warning(f"[Scheduler] По запросу «{search_query}» ничего не найдено")
-        return False
+        return False, (
+            f"на Яндекс Маркете ничего не нашлось по запросу «{search_query}» "
+            f"(проверено {_SEARCH_ATTEMPTS} раза). Попробуйте другую "
+            f"формулировку"
+        )
 
     # Берём один самый "надёжный" товар: рейтинг → число отзывов → скидка.
     # Сами отзывы в статью не попадут, но как признак того, что товар живой и
@@ -282,27 +371,18 @@ def run_single_product_post_cycle(db: Database, query: str) -> bool:
     title, body_html = generate_single_product_article(product, topic=search_query)
     if not title or not body_html:
         logger.error(f"[Scheduler] Не удалось собрать статью по запросу «{query}»")
-        return False
+        return False, "не удалось собрать текст статьи"
 
-    marked_body_html = _apply_ad_marking([product], title, body_html)
-    if marked_body_html is None:
-        logger.error(f"[Scheduler] Публикация по запросу «{query}» отменена — не удалось получить erid")
-        return False
-    body_html = marked_body_html
-
-    success = post_to_dzen(title, body_html)
-
-    if success:
-        if product.id:
-            db.mark_posted([product.id])
+    ok, reason = _publish_with_retries(db, [product], title, body_html)
+    if ok:
         logger.info(f"[Scheduler] Опубликована статья по запросу «{query}»")
-        return True
+        return True, ""
 
-    logger.warning(f"[Scheduler] Публикация по запросу «{query}» не удалась (ошибка Дзена)")
-    return False
+    logger.warning(f"[Scheduler] Статья по запросу «{query}» не опубликована: {reason}")
+    return False, reason
 
 
-def run_post_cycle_for_query(db: Database, query: str) -> bool:
+def run_post_cycle_for_query(db: Database, query: str) -> tuple:
     """Единая точка входа для запроса пользователя из Telegram.
 
     Сама решает, что именно он попросил: подборку (топ с ценами, рейтингами,
