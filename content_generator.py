@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from models import Product, Marketplace
 from referral_builder import build_ym_cpa_link, get_post_footer
-from article_writer import generate_ai_copy
+from article_writer import generate_ai_copy, generate_single_product_copy
 from reviews_extractor import real_cons_from_reviews, real_pros_from_reviews
 
 
@@ -221,6 +221,81 @@ def generate_dzen_article(
 
     body = "\n".join(parts)
     return title, body
+
+
+def generate_single_product_article(p: Product, topic: str = "") -> tuple[str, str]:
+    """Статья-обзор об ОДНОМ товаре: заголовок, фото, живой текст, ссылка.
+
+    Это второй режим работы бота (см. scheduler.run_post_cycle_for_query).
+    Обычный запрос вроде "шапка" даёт именно такую статью: просто текст про
+    вещь, без отзывов покупателей, без оценок и без списков плюсов/минусов —
+    их пользователь просил показывать только когда он прямо просит подборку.
+    Цену и скидку здесь тоже не показываем: цифры быстро устаревают, а
+    отдельного блока с ними в этом формате нет, поэтому и в тексте модели
+    запрещено на них ссылаться (см. article_writer._build_single_prompt).
+
+    Маркировка рекламы (erid) добавляется НЕ здесь, а выше по стеку, в
+    scheduler._apply_ad_marking — ровно так же, как для подборки: правила
+    маркировки в обоих режимах одинаковые.
+    """
+    if not p:
+        return "", ""
+
+    ai = generate_single_product_copy(p, topic)
+
+    short_name = _shorten_product_name(p.name)
+
+    if ai and ai.get("paragraphs"):
+        title = ai.get("title") or short_name
+        paragraphs = ai["paragraphs"]
+    else:
+        title = short_name
+        # Запасной текст без AI — сознательно общий: про сам товар достоверно
+        # известны только название и бренд, поэтому ничего "характерного" мы
+        # тут придумать не можем и не пытаемся.
+        paragraphs = []
+        if p.brand:
+            paragraphs.append(
+                f"{short_name} — товар от бренда {p.brand}, который сейчас "
+                f"можно посмотреть на Яндекс Маркете."
+            )
+        else:
+            paragraphs.append(
+                f"{short_name} — один из вариантов, которые сейчас можно "
+                f"посмотреть на Яндекс Маркете."
+            )
+        paragraphs.append(
+            "Выбирая такую вещь, стоит заранее прикинуть, как часто и в каких "
+            "условиях вы будете ей пользоваться — от этого обычно и зависит, "
+            "какой вариант окажется удачным именно для вас."
+        )
+        paragraphs.append(
+            "Полное описание, характеристики и комплектацию удобнее всего "
+            "смотреть прямо на странице товара по ссылке ниже — там же видно "
+            "актуальную цену и наличие."
+        )
+
+    parts = []
+
+    if p.image_url:
+        parts.append(
+            f'<p><img src="{html.escape(p.image_url)}" alt="{html.escape(short_name)}"></p>'
+        )
+
+    for para in paragraphs:
+        parts.append(f"<p>{html.escape(para)}</p>")
+
+    cpa_link = build_ym_cpa_link(p.url)
+    parts.append(
+        f'<p><a href="{cpa_link}" target="_blank">'
+        f'Посмотреть на Яндекс Маркете</a></p>'
+    )
+
+    footer = get_post_footer()
+    if footer:
+        parts.append(f'<p><small>{footer}</small></p>')
+
+    return title, "\n".join(parts)
 
 
 def generate_dzen_post_text(products: list[Product]) -> str:

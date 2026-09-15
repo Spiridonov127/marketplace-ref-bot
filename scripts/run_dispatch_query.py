@@ -64,7 +64,10 @@ def main():
 
     from config import config
     from database import Database
-    from scheduler import run_category_post_cycle
+    # Режим (подборка или статья про один предмет) определяется внутри, по
+    # тексту запроса — см. scheduler.run_post_cycle_for_query. Одна и та же
+    # функция используется и локальным ботом, чтобы поведение не разъезжалось.
+    from scheduler import run_post_cycle_for_query
 
     if not config.YANDEX_DISTRIBUTION_PARTNER_ID:
         logger.warning("YANDEX_DISTRIBUTION_PARTNER_ID не задан — CPA-ссылки будут обычными URL")
@@ -73,7 +76,7 @@ def main():
     db = Database(config.DB_PATH)
 
     try:
-        success = run_category_post_cycle(db, query, top_n=5)
+        success = run_post_cycle_for_query(db, query)
     except Exception as e:
         logger.error(f"[Dispatch] Ошибка при обработке запроса {query!r}: {e}")
         _send_telegram(chat_id, f"❌ Ошибка: {e}\n\n{_OFF_NOTICE}")

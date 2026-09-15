@@ -148,3 +148,96 @@ def generate_ai_copy(products: list[Product]) -> Optional[dict]:
     parsed["items"] = normalized
 
     return parsed
+
+
+def _build_single_prompt(p: Product, topic: str = "") -> str:
+    """Промпт для статьи об ОДНОМ товаре — без отзывов, оценок и списков
+    плюсов/минусов.
+
+    Это принципиально другой жанр, чем подборка: там читателю нужно сравнить
+    несколько вариантов по цифрам, здесь — просто прочитать живой текст про
+    вещь. Поэтому модели прямо запрещено упоминать цену, скидку, рейтинг и
+    мнения покупателей: этих блоков в такой статье нет, и если текст начнёт
+    на них ссылаться ("судя по отзывам..."), получится ложь.
+    """
+    lines = [f"Товар: {p.name}", f"Бренд: {p.brand or 'не указан'}"]
+    if topic:
+        lines.append(f"Читатель искал: {topic}")
+
+    return (
+        "Ты пишешь статью для Яндекс Дзена об одном конкретном товаре с "
+        "Яндекс Маркета.\n\n"
+        + "\n".join(lines)
+        + "\n\n"
+        "Правила:\n"
+        "- Пиши живо, по-человечески, без канцелярита и без рекламных штампов "
+        'вроде "успей купить" или "лучшая цена".\n'
+        "- НЕ выдумывай технические характеристики, размеры, материалы, "
+        "комплектацию и любые другие факты, которых нет выше: про сам товар "
+        "известны только название и бренд. Всё остальное пиши как общие "
+        "рассуждения о такой категории вещей, а не как утверждения об этой "
+        "конкретной модели.\n"
+        "- НЕ упоминай цену, скидку, рейтинг, количество отзывов и мнения "
+        "покупателей — этих данных в статье не будет, ссылаться на них нельзя.\n"
+        '- Не обращайся к читателю "дорогой читатель" и не заканчивай '
+        'фразами в духе "подводя итог".\n\n'
+        "Верни ТОЛЬКО валидный JSON, без markdown-разметки вокруг него и без "
+        "пояснений, в формате:\n"
+        '{"title": "цепляющий заголовок статьи, не более 90 символов", '
+        '"paragraphs": ["абзац 1", "абзац 2", "абзац 3", "абзац 4"]}\n\n'
+        "В paragraphs — от 4 до 6 абзацев по 2-4 предложения: чем такая вещь "
+        "бывает полезна, кому и в каких ситуациях подходит, на что смотреть "
+        "при выборе, как ей пользоваться или с чем сочетать."
+    )
+
+
+def generate_single_product_copy(p: Product, topic: str = "") -> Optional[dict]:
+    """Текст статьи-обзора об одном товаре.
+
+    Возвращает {"title": str, "paragraphs": [str, ...]} либо None, если Groq
+    не настроен/недоступен/ответил не тем — вызывающий код
+    (content_generator.generate_single_product_article) тогда подставляет
+    запасной шаблон, и публикация не срывается из-за недоступности AI.
+    """
+    if not p:
+        return None
+
+    if not config.GROQ_API_KEY:
+        logger.info("[AI] GROQ_API_KEY не задан — используем шаблонный текст")
+        return None
+
+    try:
+        resp = requests.post(
+            GROQ_API_URL,
+            headers={
+                "Authorization": f"Bearer {config.GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": GROQ_MODEL,
+                "messages": [
+                    {"role": "user", "content": _build_single_prompt(p, topic)}
+                ],
+                "temperature": 0.8,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"]
+        parsed = json.loads(raw)
+    except Exception as e:
+        logger.warning(f"[AI] Не удалось получить текст от Groq: {e}")
+        return None
+
+    paragraphs = [
+        str(x).strip() for x in (parsed.get("paragraphs") or []) if str(x).strip()
+    ]
+    if not paragraphs:
+        logger.warning("[AI] Groq не вернул ни одного абзаца — используем шаблонный текст")
+        return None
+
+    return {
+        "title": str(parsed.get("title") or "").strip(),
+        "paragraphs": paragraphs[:8],
+    }

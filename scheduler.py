@@ -1,17 +1,74 @@
 """Планировщик: Яндекс Маркет → Яндекс Дзен."""
 import html
 import logging
+import re
+
 import telebot
 import schedule
 
 from config import config
 from database import Database
 from models import Marketplace, Product
-from content_generator import generate_dzen_article, generate_dzen_post_text
+from content_generator import (
+    generate_dzen_article,
+    generate_dzen_post_text,
+    generate_single_product_article,
+)
 from referral_builder import build_ym_cpa_link, add_erid_to_url
 from distribution_erid import get_marked_link
 
 logger = logging.getLogger(__name__)
+
+# Слова, по которым запрос пользователя считается просьбой собрать ПОДБОРКУ
+# (топ с ценами, рейтингами, плюсами и минусами из отзывов). Всё остальное —
+# например просто "шапка" — это просьба написать обычную статью про предмет,
+# без отзывов и оценок.
+_TOP_WORDS_RE = re.compile(
+    # топ\d* — чтобы сработало и "топ-5", и слитное "топ10".
+    r"(^|\W)(топ\d*|подборк\w*|лучш\w+|рейтинг\w*|сравн\w+|собер\w+|подбер\w+)(\W|$)",
+    re.IGNORECASE,
+)
+
+# "топ-5", "топ 3", "топ10" — сколько товаров брать в подборку.
+_TOP_N_RE = re.compile(r"топ[\s\-–—]*(\d{1,2})", re.IGNORECASE)
+
+# Служебные слова, которые нужны для понимания задачи, но мешают поиску на
+# Яндекс Маркете: искать там буквально "собери топ-5 наушников" — значит не
+# найти ничего. Вырезаем их и ищем по тому, что осталось ("наушников").
+_QUERY_NOISE_RE = re.compile(
+    r"(^|\W)(топ[\s\-–—]*\d*|подборк\w*|лучш\w+|рейтинг\w*|сравн\w+|собер\w+|"
+    r"подбер\w+|сделай|составь|напиши|создай|статью|статья|пост|про|об|о)(\W|$)",
+    re.IGNORECASE,
+)
+
+
+def wants_top_selection(query: str) -> bool:
+    """Просил ли пользователь именно подборку, а не статью про один предмет."""
+    return bool(_TOP_WORDS_RE.search(query or ""))
+
+
+def extract_top_n(query: str, default: int = 5) -> int:
+    """Сколько товаров в подборке: из "топ-5" берём 5, иначе значение по
+    умолчанию. Ограничиваем сверху, чтобы "топ-100" не превратился в статью
+    на сто позиций и час работы Playwright."""
+    m = _TOP_N_RE.search(query or "")
+    if m:
+        return max(2, min(int(m.group(1)), 10))
+    return default
+
+
+def clean_search_query(query: str) -> str:
+    """Оставляет от запроса только то, что имеет смысл искать на Маркете."""
+    q = query or ""
+    prev = None
+    # Несколько проходов: соседние служебные слова делят общий разделитель,
+    # и за один проход регулярка съедает только через одно ("напиши статью
+    # про шапку" -> "статью шапку" -> "шапку").
+    while prev != q:
+        prev = q
+        q = _QUERY_NOISE_RE.sub(" ", q)
+    q = re.sub(r"\s+", " ", q).strip(" \t\n-–—,.:;!?")
+    return q or (query or "").strip()
 
 
 def _apply_ad_marking(products: list, title: str, body_html: str):
@@ -136,10 +193,13 @@ def run_category_post_cycle(db: Database, query: str, top_n: int = 5) -> bool:
     if not query:
         return False
 
-    logger.info(f"[Scheduler] Поиск по запросу «{query}»...")
-    found = parse_ym_search_playwright(query, limit=max(config.MAX_PRODUCTS_PER_PARSE, top_n))
+    search_query = clean_search_query(query)
+    logger.info(f"[Scheduler] Поиск подборки по запросу «{query}» (ищу: «{search_query}»)...")
+    found = parse_ym_search_playwright(
+        search_query, limit=max(config.MAX_PRODUCTS_PER_PARSE, top_n)
+    )
     if not found:
-        logger.warning(f"[Scheduler] По запросу «{query}» ничего не найдено")
+        logger.warning(f"[Scheduler] По запросу «{search_query}» ничего не найдено")
         return False
 
     # "Популярное" — сортируем по рейтингу и числу отзывов, скидка вторична
@@ -179,6 +239,85 @@ def run_category_post_cycle(db: Database, query: str, top_n: int = 5) -> bool:
 
     logger.warning(f"[Scheduler] Публикация по запросу «{query}» не удалась (ошибка Дзена)")
     return False
+
+
+def run_single_product_post_cycle(db: Database, query: str) -> bool:
+    """Обычный запрос ("шапка", "напиши про кофемашину") — статья-обзор об
+    ОДНОМ товаре: живой текст, фото, ссылка. Без отзывов покупателей, без
+    рейтингов и без списков плюсов/минусов — они показываются только в режиме
+    подборки (run_category_post_cycle), когда пользователь прямо об этом
+    просит.
+
+    Маркировка рекламы (erid) обязательна точно так же, как в подборке: без
+    неё публикация отменяется.
+    """
+    from dzen_poster import post_to_dzen
+    from parsers.playwright_parsers import parse_ym_search_playwright
+
+    query = (query or "").strip()
+    if not query:
+        return False
+
+    search_query = clean_search_query(query)
+    logger.info(f"[Scheduler] Статья по запросу «{query}» (ищу: «{search_query}»)...")
+    found = parse_ym_search_playwright(
+        search_query, limit=max(config.MAX_PRODUCTS_PER_PARSE, 10)
+    )
+    if not found:
+        logger.warning(f"[Scheduler] По запросу «{search_query}» ничего не найдено")
+        return False
+
+    # Берём один самый "надёжный" товар: рейтинг → число отзывов → скидка.
+    # Сами отзывы в статью не попадут, но как признак того, что товар живой и
+    # не случайный, рейтинг здесь по-прежнему полезен.
+    found.sort(key=lambda p: (p.rating, p.reviews_count, p.discount_percent), reverse=True)
+    product = found[0]
+
+    ids = db.insert_products_return_ids([product])
+    if ids and ids[0]:
+        product.id = ids[0]
+
+    product.referral_url = build_ym_cpa_link(product.url)
+
+    title, body_html = generate_single_product_article(product, topic=search_query)
+    if not title or not body_html:
+        logger.error(f"[Scheduler] Не удалось собрать статью по запросу «{query}»")
+        return False
+
+    marked_body_html = _apply_ad_marking([product], title, body_html)
+    if marked_body_html is None:
+        logger.error(f"[Scheduler] Публикация по запросу «{query}» отменена — не удалось получить erid")
+        return False
+    body_html = marked_body_html
+
+    success = post_to_dzen(title, body_html)
+
+    if success:
+        if product.id:
+            db.mark_posted([product.id])
+        logger.info(f"[Scheduler] Опубликована статья по запросу «{query}»")
+        return True
+
+    logger.warning(f"[Scheduler] Публикация по запросу «{query}» не удалась (ошибка Дзена)")
+    return False
+
+
+def run_post_cycle_for_query(db: Database, query: str) -> bool:
+    """Единая точка входа для запроса пользователя из Telegram.
+
+    Сама решает, что именно он попросил: подборку (топ с ценами, рейтингами,
+    плюсами и минусами из реальных отзывов) или обычную статью про предмет.
+    Используется и локальным ботом, и облачным запуском в GitHub Actions
+    (scripts/run_dispatch_query.py), чтобы поведение в обоих случаях было
+    гарантированно одинаковым.
+    """
+    if wants_top_selection(query):
+        top_n = extract_top_n(query)
+        logger.info(f"[Scheduler] Режим подборки (топ-{top_n}) для запроса «{query}»")
+        return run_category_post_cycle(db, query, top_n=top_n)
+
+    logger.info(f"[Scheduler] Режим статьи об одном товаре для запроса «{query}»")
+    return run_single_product_post_cycle(db, query)
 
 
 def _save_draft(title: str, body_html: str, text: str):
