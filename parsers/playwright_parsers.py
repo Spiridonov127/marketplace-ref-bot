@@ -46,6 +46,38 @@ def _create_browser_context(playwright):
     return browser, context
 
 
+def _dump_empty_result_debug(page, tag: str):
+    """Сохраняет, что реально показал Маркет, когда товаров не нашлось.
+
+    Снаружи "ничего не найдено" выглядит одинаково в трёх очень разных
+    случаях: товаров правда нет; Яндекс показал капчу (её ловим по заголовку,
+    но у разных заглушек заголовки разные); Яндекс просто не отдал выдачу
+    этому IP — так бывает с дата-центровыми адресами, с которых ходит GitHub
+    Actions. Скриншот и текст страницы отвечают на это сразу, без гадания.
+    Файлы кладём в data/, откуда workflow забирает их артефактом.
+    """
+    import os
+
+    try:
+        os.makedirs("data", exist_ok=True)
+        url = page.url
+        title = page.title()
+        try:
+            text = page.inner_text("body")[:2000]
+        except Exception:
+            text = "(не удалось прочитать текст страницы)"
+
+        logger.warning(f"[YM debug/{tag}] Пусто. URL: {url}")
+        logger.warning(f"[YM debug/{tag}] Заголовок: {title!r}")
+        logger.warning(f"[YM debug/{tag}] Начало текста: {text[:500]!r}")
+
+        page.screenshot(path=f"data/ym_debug_{tag}.png", full_page=False)
+        with open(f"data/ym_debug_{tag}.txt", "w", encoding="utf-8") as f:
+            f.write(f"URL: {url}\nTITLE: {title}\n\n{text}")
+    except Exception as e:
+        logger.warning(f"[YM debug/{tag}] Не удалось снять диагностику: {e}")
+
+
 def parse_ym_playwright(limit: int = 30) -> list[Product]:
     """Яндекс Маркет через Playwright."""
     sp = _try_playwright()
@@ -354,6 +386,9 @@ def parse_ym_search_playwright(query: str, limit: int = 30) -> list[Product]:
                             break
                     except Exception:
                         continue
+
+            if not products:
+                _dump_empty_result_debug(page, "search")
 
             browser.close()
     except Exception as e:

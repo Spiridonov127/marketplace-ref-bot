@@ -44,7 +44,12 @@ def _send_telegram(chat_id: str, text: str):
             json={"chat_id": chat_id, "text": text},
             timeout=15,
         )
-        if not resp.ok:
+        if resp.ok:
+            # Логируем и успех тоже: иначе при жалобе "в телеграме ничего нет"
+            # по логу невозможно понять, не отправили мы сообщение или
+            # отправили, а оно не дошло.
+            logger.info(f"Сообщение в Telegram отправлено (chat_id={chat_id})")
+        else:
             logger.error(f"Telegram sendMessage вернул {resp.status_code}: {resp.text}")
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение в Telegram: {e}")

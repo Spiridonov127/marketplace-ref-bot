@@ -60,6 +60,17 @@ jobs:
           MIN_DISCOUNT_PERCENT: ${{ vars.MIN_DISCOUNT_PERCENT || '20' }}
         run: python scripts/run_dispatch_query.py
 
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ym-debug
+          path: |
+            data/ym_debug_*.png
+            data/ym_debug_*.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Upload updated database
         uses: actions/upload-artifact@v4
         with:
