@@ -17,6 +17,7 @@ from content_generator import (
 )
 from referral_builder import build_ym_cpa_link, add_erid_to_url
 from distribution_erid import get_marked_link
+from parsers.playwright_parsers import YandexCaptchaError
 
 logger = logging.getLogger(__name__)
 
@@ -198,11 +199,20 @@ _RETRY_PAUSE_SECONDS = 10
 
 
 def _search_with_retries(search_query: str, limit: int) -> list:
+    """Ищет товары, повторяя попытку при пустом результате.
+
+    Капчу (YandexCaptchaError) НЕ повторяем и пробрасываем наверх: повтор
+    с того же IP даст ту же капчу, только потратит ещё полминуты и ещё один
+    запрос — а пользователю важно получить честный ответ "нас забанил
+    Яндекс", а не "попробуйте другую формулировку".
+    """
     from parsers.playwright_parsers import parse_ym_search_playwright
 
     for attempt in range(1, _SEARCH_ATTEMPTS + 1):
         try:
             found = parse_ym_search_playwright(search_query, limit=limit)
+        except YandexCaptchaError:
+            raise
         except Exception as e:
             logger.warning(
                 f"[Scheduler] Поиск «{search_query}» упал "
@@ -289,9 +299,18 @@ def run_category_post_cycle(db: Database, query: str, top_n: int = 5) -> tuple:
 
     search_query = clean_search_query(query)
     logger.info(f"[Scheduler] Поиск подборки по запросу «{query}» (ищу: «{search_query}»)...")
-    found = _search_with_retries(
-        search_query, limit=max(config.MAX_PRODUCTS_PER_PARSE, top_n)
-    )
+    try:
+        found = _search_with_retries(
+            search_query, limit=max(config.MAX_PRODUCTS_PER_PARSE, top_n)
+        )
+    except YandexCaptchaError as e:
+        logger.error(f"[Scheduler] {e}")
+        return False, (
+            "Яндекс Маркет показал капчу вместо результатов поиска. Это "
+            "происходит потому, что запрос идёт с IP дата-центра GitHub, а "
+            "Яндекс такие адреса блокирует. Повторы тут не помогут — нужен "
+            "российский IP"
+        )
     if not found:
         logger.warning(f"[Scheduler] По запросу «{search_query}» ничего не найдено")
         return False, (
@@ -345,9 +364,18 @@ def run_single_product_post_cycle(db: Database, query: str) -> tuple:
 
     search_query = clean_search_query(query)
     logger.info(f"[Scheduler] Статья по запросу «{query}» (ищу: «{search_query}»)...")
-    found = _search_with_retries(
-        search_query, limit=max(config.MAX_PRODUCTS_PER_PARSE, 10)
-    )
+    try:
+        found = _search_with_retries(
+            search_query, limit=max(config.MAX_PRODUCTS_PER_PARSE, 10)
+        )
+    except YandexCaptchaError as e:
+        logger.error(f"[Scheduler] {e}")
+        return False, (
+            "Яндекс Маркет показал капчу вместо результатов поиска. Это "
+            "происходит потому, что запрос идёт с IP дата-центра GitHub, а "
+            "Яндекс такие адреса блокирует. Повторы тут не помогут — нужен "
+            "российский IP"
+        )
     if not found:
         logger.warning(f"[Scheduler] По запросу «{search_query}» ничего не найдено")
         return False, (

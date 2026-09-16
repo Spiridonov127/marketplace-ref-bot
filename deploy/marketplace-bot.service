@@ -1,0 +1,28 @@
+[Unit]
+Description=Marketplace ref bot (Яндекс Маркет -> Дзен)
+# network-online, а не просто network: боту нужен уже поднятый интернет,
+# иначе при старте сервера он упрётся в "Network is unreachable" ещё до
+# первого запроса к Telegram.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/marketplace-ref-bot
+ExecStart=/root/marketplace-ref-bot/venv/bin/python main.py
+
+# Двойная страховка от падений. Внутри main.py уже есть свой цикл
+# перезапуска опроса Telegram (он переживает обрывы сети), но если
+# умрёт сам процесс — например, ядро прибьёт его по нехватке памяти во
+# время работы Chromium, — поднять его обратно может только systemd.
+Restart=always
+RestartSec=15
+
+# Логи уходят в journalctl: смотреть через
+#   journalctl -u marketplace-bot -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -10,6 +10,39 @@ from referral_builder import build_referral_url
 logger = logging.getLogger(__name__)
 
 
+class YandexCaptchaError(Exception):
+    """Яндекс показал SmartCaptcha вместо запрошенной страницы.
+
+    Отдельный тип ошибки, а не пустой список, потому что это принципиально
+    другая ситуация: "товаров не нашлось" лечится другим запросом и повтором,
+    а капча — нет, её повторять бессмысленно, надо менять IP. Раньше капча
+    молча выглядела как "ничего не нашлось", и бот советовал пользователю
+    переформулировать запрос, хотя запрос был ни при чём.
+    """
+
+
+def _is_captcha(page) -> bool:
+    """Определяет страницу SmartCaptcha по трём независимым признакам.
+
+    Проверять только заголовок мало: раньше здесь искали "robot"/"captcha"
+    латиницей, а Яндекс отдаёт заголовок "Вы не робот?" кириллицей — и капча
+    проходила незамеченной (подтверждено логом боевого запуска).
+    """
+    try:
+        if "showcaptcha" in (page.url or "").lower():
+            return True
+        title = (page.title() or "").lower()
+        if any(w in title for w in ("robot", "робот", "captcha", "капча")):
+            return True
+        try:
+            body = page.inner_text("body")[:1000].lower()
+        except Exception:
+            return False
+        return "smartcaptcha" in body or "вы не робот" in body
+    except Exception:
+        return False
+
+
 def _try_playwright():
     try:
         from playwright.sync_api import sync_playwright
@@ -102,7 +135,7 @@ def parse_ym_playwright(limit: int = 30) -> list[Product]:
 
             # Проверяем CAPTCHA
             title = page.title()
-            if "robot" in title.lower() or "captcha" in title.lower():
+            if _is_captcha(page) or "robot" in title.lower() or "captcha" in title.lower():
                 logger.warning("[YM] CAPTCHA detected")
                 browser.close()
                 return products
@@ -327,11 +360,16 @@ def parse_ym_search_playwright(query: str, limit: int = 30) -> list[Product]:
             except Exception as e:
                 logger.warning(f"[YM search] Page load error for {query!r}: {e}")
 
-            title = page.title()
-            if "robot" in title.lower() or "captcha" in title.lower():
-                logger.warning(f"[YM search] CAPTCHA detected for query {query!r}")
+            if _is_captcha(page):
+                logger.error(
+                    f"[YM search] Яндекс показал капчу вместо выдачи по {query!r} "
+                    f"(URL: {page.url[:120]})"
+                )
+                _dump_empty_result_debug(page, "captcha")
                 browser.close()
-                return products
+                raise YandexCaptchaError(
+                    "Яндекс Маркет показал капчу вместо результатов поиска"
+                )
 
             price_patches = _extract_price_patches(page)
 
