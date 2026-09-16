@@ -34,6 +34,17 @@ class Config:
         int(x) for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()
     ])
 
+    # MAX (российский мессенджер) — замена Telegram для управления ботом на
+    # ВПС: platform-api2.max.ru не блокируется с российских IP, поэтому не
+    # нужны ни Cloudflare-релей, ни ретраи на дырявую сеть, которые
+    # понадобились для Telegram (см. TELEGRAM_API_URL выше). Если задан
+    # MAX_BOT_TOKEN — main.py использует MAX вместо Telegram, см.
+    # bot/max_bot.py. Токен создаётся в самом MAX через диалог с @MasterBot.
+    MAX_BOT_TOKEN: str = os.getenv("MAX_BOT_TOKEN", "")
+    MAX_ADMIN_USER_IDS: list[int] = field(default_factory=lambda: [
+        int(x) for x in os.getenv("MAX_ADMIN_USER_IDS", "").split(",") if x.strip()
+    ])
+
     # Яндекс Дистрибуция (CPA)
     YANDEX_DISTRIBUTION_PARTNER_ID: str = os.getenv("YANDEX_DISTRIBUTION_PARTNER_ID", "")
     YANDEX_DISTRIBUTION_API_KEY: str = os.getenv("YANDEX_DISTRIBUTION_API_KEY", "")
@@ -74,7 +85,10 @@ class Config:
 
     @property
     def is_configured(self) -> bool:
-        return bool(self.TELEGRAM_BOT_TOKEN and self.YANDEX_DISTRIBUTION_PARTNER_ID)
+        return bool(
+            (self.TELEGRAM_BOT_TOKEN or self.MAX_BOT_TOKEN)
+            and self.YANDEX_DISTRIBUTION_PARTNER_ID
+        )
 
 
 config = Config()

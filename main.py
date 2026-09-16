@@ -16,7 +16,6 @@ import time
 
 from config import config
 from database import Database
-from bot import create_bot
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,12 +41,23 @@ def main():
 
     if not config.is_configured:
         logger.error(
-            "Missing config! Set TELEGRAM_BOT_TOKEN and YANDEX_DISTRIBUTION_PARTNER_ID "
-            "in .env or environment variables."
+            "Missing config! Set TELEGRAM_BOT_TOKEN or MAX_BOT_TOKEN, plus "
+            "YANDEX_DISTRIBUTION_PARTNER_ID, in .env or environment variables."
         )
         return
 
     db = Database(config.DB_PATH)
+
+    # MAX не блокируется с российских IP (в отличие от Telegram — см.
+    # TELEGRAM_API_URL в config.py), поэтому на ВПС предпочитается он, если
+    # настроен. Telegram остаётся рабочим вариантом (например, для запуска
+    # на домашнем компьютере, где блокировки нет).
+    if config.MAX_BOT_TOKEN:
+        from bot.max_bot import create_bot
+        platform_name = "MAX"
+    else:
+        from bot import create_bot
+        platform_name = "Telegram"
     bot = create_bot(db)
 
     # Запуск бота — единственный источник задач теперь /start в Telegram,
@@ -60,15 +70,15 @@ def main():
     # отвечать на /start до тех пор, пока кто-то вручную не перезапустит
     # main.py. Оборачиваем вызов в свой собственный бесконечный цикл с
     # перезапуском, чтобы разовый сбой сети не убивал бота насовсем.
-    logger.info("[Startup] Bot started")
+    logger.info(f"[Startup] Bot started ({platform_name})")
     while True:
         try:
             bot.infinity_polling(timeout=60, long_polling_timeout=60)
         except Exception as e:
-            logger.error(f"[Startup] Опрос Telegram упал с ошибкой: {e}")
+            logger.error(f"[Startup] Опрос {platform_name} упал с ошибкой: {e}")
         else:
-            logger.warning("[Startup] Опрос Telegram завершился без ошибки (неожиданно)")
-        logger.info("[Startup] Перезапускаю опрос Telegram через 15 секунд...")
+            logger.warning(f"[Startup] Опрос {platform_name} завершился без ошибки (неожиданно)")
+        logger.info(f"[Startup] Перезапускаю опрос {platform_name} через 15 секунд...")
         time.sleep(15)
 
 
