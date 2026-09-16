@@ -28,6 +28,15 @@ def create_bot(db: Database) -> telebot.TeleBot:
         # успеха на попытку 15 попыток дают уже >99.5% шанс достучаться.
         telebot.apihelper.RETRY_ON_ERROR = True
         telebot.apihelper.CONNECT_TIMEOUT = 8
+        # apihelper по умолчанию держит один requests.Session (и его пул
+        # соединений) 10 минут (SESSION_TIME_TO_LIVE=600) — на нестабильной
+        # сети это значит, что "протухшее" TCP-соединение (числится
+        # ESTABLISHED локально, но на деле мертво — потерян FIN/RST при
+        # обрыве) будет использоваться повторно вместо открытия нового,
+        # и все запросы через него будут молча виснуть до таймаута чтения.
+        # 0 — новое соединение на каждый запрос, дороже по времени TLS-
+        # хэндшейка (~0.2-0.5с), но не залипает.
+        telebot.apihelper.SESSION_TIME_TO_LIVE = 0
     bot = telebot.TeleBot(config.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
 
     def is_admin(user_id: int) -> bool:
