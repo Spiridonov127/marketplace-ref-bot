@@ -21,6 +21,15 @@ class Config:
     # Bot API идут через прокси на Cloudflare Worker (не блокируется),
     # см. cloudflare-worker/src/worker.js — маршрут /bot<token>/<method>.
     TELEGRAM_API_URL: str = os.getenv("TELEGRAM_API_URL", "")
+
+    # Обратная сторона той же проблемы: Яндекс Маркет капчит датацентровые
+    # IP, в т.ч. сам Yandex Cloud (проверено на бою — капча на запросе
+    # «Часы» с этой же ВМ). Единственный "тихий" IP — домашний. Поэтому
+    # трафик именно к market.yandex.ru заворачивается в SOCKS5-туннель до
+    # домашнего компьютера (см. deploy/home-proxy-tunnel.service — reverse
+    # ssh -R с домашней машины поднимает SOCKS5 на localhost:1080 этой ВМ).
+    # На Дзен (dzen_poster.py) это не распространяется — там капчи не было.
+    YM_PROXY_URL: str = os.getenv("YM_PROXY_URL", "")
     ADMIN_USER_IDS: list[int] = field(default_factory=lambda: [
         int(x) for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()
     ])

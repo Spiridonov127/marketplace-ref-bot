@@ -17,6 +17,8 @@
 import logging
 import re
 
+from config import config
+
 logger = logging.getLogger(__name__)
 
 _MONTHS_RE = re.compile(
@@ -37,6 +39,7 @@ def _try_playwright():
 def _create_context(p):
     browser = p.chromium.launch(
         headless=True,
+        proxy={"server": config.YM_PROXY_URL} if config.YM_PROXY_URL else None,
         args=[
             "--disable-blink-features=AutomationControlled",
             "--disable-features=IsolateOrigins,site-per-process",

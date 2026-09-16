@@ -80,6 +80,7 @@ def get_marked_link(product_url: str, creative_text: str) -> Optional[dict]:
         with sp() as p:
             browser = p.chromium.launch(
                 headless=True,
+                proxy={"server": config.YM_PROXY_URL} if config.YM_PROXY_URL else None,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
             )
             context = browser.new_context(

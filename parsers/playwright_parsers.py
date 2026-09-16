@@ -6,6 +6,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 from models import Product, Marketplace
 from referral_builder import build_referral_url
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ def _create_browser_context(playwright):
     """Создаёт контекст браузера с anti-detect настройками."""
     browser = playwright.chromium.launch(
         headless=True,
+        proxy={"server": config.YM_PROXY_URL} if config.YM_PROXY_URL else None,
         args=[
             "--disable-blink-features=AutomationControlled",
             "--disable-features=IsolateOrigins,site-per-process",
