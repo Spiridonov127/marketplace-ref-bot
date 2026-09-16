@@ -19,6 +19,15 @@ _OFF_NOTICE = "Бот отключился — когда понадобится
 def create_bot(db: Database) -> telebot.TeleBot:
     if config.TELEGRAM_API_URL:
         telebot.apihelper.API_URL = config.TELEGRAM_API_URL.rstrip("/") + "/bot{0}/{1}"
+        # Путь Яндекс.Облако -> Cloudflare (см. TELEGRAM_API_URL в config.py)
+        # ощутимо "дырявый" — до ~30% запросов не проходят с первой попытки
+        # (не блокировка, а просто потери на маршруте). apihelper по
+        # умолчанию не ретраит вообще, а падает с одной ошибки — из-за чего
+        # наш собственный цикл перезапуска в main.py отваливался на каждую
+        # мелкую сетевую потерю. Включаем встроенный ретрай telebot: с 30%
+        # успеха на попытку 15 попыток дают уже >99.5% шанс достучаться.
+        telebot.apihelper.RETRY_ON_ERROR = True
+        telebot.apihelper.CONNECT_TIMEOUT = 8
     bot = telebot.TeleBot(config.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
 
     def is_admin(user_id: int) -> bool:
