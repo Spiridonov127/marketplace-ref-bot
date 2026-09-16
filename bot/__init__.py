@@ -17,6 +17,8 @@ _OFF_NOTICE = "Бот отключился — когда понадобится
 
 
 def create_bot(db: Database) -> telebot.TeleBot:
+    if config.TELEGRAM_API_URL:
+        telebot.apihelper.API_URL = config.TELEGRAM_API_URL.rstrip("/") + "/bot{0}/{1}"
     bot = telebot.TeleBot(config.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
 
     def is_admin(user_id: int) -> bool:

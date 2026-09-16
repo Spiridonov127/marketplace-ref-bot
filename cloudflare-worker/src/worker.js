@@ -73,6 +73,27 @@ const AWAITING_TTL_SECONDS = 60 * 60;
 
 export default {
   async fetch(request, env) {
+    // Прозрачный прокси к Bot API: с российских IP (например, наш VPS
+    // в Яндекс.Облаке — captcha на Маркете требует именно такой IP)
+    // api.telegram.org не отвечает — Telegram заблокирован на уровне
+    // провайдера. Cloudflare не блокируется, поэтому бот на VPS ходит
+    // не напрямую в Telegram, а сюда: /bot<token>/<method> пересылается
+    // как есть на https://api.telegram.org/bot<token>/<method>, включая
+    // long polling (getUpdates) и отправку сообщений.
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/bot")) {
+      const target = "https://api.telegram.org" + url.pathname + url.search;
+      const proxied = await fetch(target, {
+        method: request.method,
+        headers: request.headers,
+        body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
+      });
+      return new Response(proxied.body, {
+        status: proxied.status,
+        headers: proxied.headers,
+      });
+    }
+
     if (request.method !== "POST") {
       return new Response("ok", { status: 200 });
     }

@@ -15,6 +15,12 @@ load_dotenv()
 class Config:
     # Telegram (для бота управления, не для постинга)
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    # С российских IP (в т.ч. наш VPS в Яндекс.Облаке — он нужен, чтобы
+    # Яндекс Маркет не показывал капчу) api.telegram.org не отвечает —
+    # Telegram заблокирован на уровне провайдера. Если задано, запросы к
+    # Bot API идут через прокси на Cloudflare Worker (не блокируется),
+    # см. cloudflare-worker/src/worker.js — маршрут /bot<token>/<method>.
+    TELEGRAM_API_URL: str = os.getenv("TELEGRAM_API_URL", "")
     ADMIN_USER_IDS: list[int] = field(default_factory=lambda: [
         int(x) for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()
     ])
