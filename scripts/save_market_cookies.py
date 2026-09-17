@@ -16,6 +16,7 @@
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -53,14 +54,32 @@ def main():
         print("[Market] Войдите в Яндекс-аккаунт в открытом браузере (кнопка")
         print("[Market] 'Войти' в правом верхнем углу) — обычным аккаунтом,")
         print("[Market] которым реально пользуетесь для покупок.")
+        print("[Market] Жду до 5 минут — как только увижу cookie 'Session_id'")
+        print("[Market] (её ставит Яндекс.Паспорт после успешного входа),")
+        print("[Market] сохраню cookies автоматически, ничего нажимать не надо.")
 
-        input("[Market] Нажмите Enter после успешного входа...")
+        # Без интерактивного stdin (input()) — скрипт может запускаться
+        # неинтерактивно (например, отдельным фоновым процессом). Session_id
+        # ставит Яндекс.Паспорт сразу после входа в ЛЮБОЙ сервис Яндекса —
+        # надёжный сигнал "вход выполнен", не завязанный на конкретную
+        # вёрстку страницы Маркета.
+        logged_in = False
+        for _ in range(150):  # 150 * 2с = 5 минут
+            if any(c.get("name") == "Session_id" for c in context.cookies()):
+                logged_in = True
+                break
+            time.sleep(2)
+
+        if not logged_in:
+            print("[Market] Не дождался входа за 5 минут — cookies не сохранены.")
+            browser.close()
+            return
 
         cookies = context.cookies()
         with open(path, "w", encoding="utf-8") as f:
             json.dump(cookies, f, ensure_ascii=False, indent=2)
 
-        print(f"[Market] Cookies сохранены: {path}")
+        print(f"[Market] Вход обнаружен, cookies сохранены: {path}")
         browser.close()
 
 
