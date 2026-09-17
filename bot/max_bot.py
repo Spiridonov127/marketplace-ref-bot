@@ -170,6 +170,7 @@ class MaxBot:
         ).start()
 
     def _handle_update(self, update: dict):
+        logger.info(f"[MaxBot] Апдейт: {update.get('update_type')}")
         if update.get("update_type") != "message_created":
             return
         message = update.get("message") or {}
@@ -193,9 +194,12 @@ class MaxBot:
                 f"(впишите его в .env, чтобы бот вас узнавал)"
             )
 
+        logger.info(f"[MaxBot] Текст от {user_id} в чате {chat_id}: {text!r}")
+
         if text == "/start":
             self.awaiting_query.add(chat_id)
             self.send_message(chat_id, _START_TEXT)
+            logger.info(f"[MaxBot] Ответил на /start в чат {chat_id}")
             return
         if text == "/help":
             self.send_message(chat_id, _HELP_TEXT)
