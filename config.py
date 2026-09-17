@@ -1,6 +1,8 @@
 """Конфигурация: Яндекс Маркет + Яндекс Дистрибуция + Дзен."""
 import os
 from dataclasses import dataclass, field
+from typing import Optional
+from urllib.parse import unquote, urlsplit
 
 from dotenv import load_dotenv
 
@@ -29,6 +31,14 @@ class Config:
     # домашнего компьютера (см. deploy/home-proxy-tunnel.service — reverse
     # ssh -R с домашней машины поднимает SOCKS5 на localhost:1080 этой ВМ).
     # На Дзен (dzen_poster.py) это не распространяется — там капчи не было.
+    # Полная форма: socks5://user:pass@host:port или http://user:pass@host:port
+    # (например, купленный резидентный/мобильный прокси). Логин/пароль
+    # вынимаются в YM_PROXY (см. ниже) — Chromium не умеет авторизовываться
+    # на SOCKS5-прокси на уровне браузера (Playwright падает с "Browser does
+    # not support socks5 proxy authentication"), поэтому для прокси с логином
+    #/паролем нужен именно http://, а не socks5:// — проверено на бою: тот
+    # же прокси по HTTP открыл Маркет без капчи, а по SOCKS5 не запустился
+    # вообще.
     YM_PROXY_URL: str = os.getenv("YM_PROXY_URL", "")
     # Анонимные (без входа) автоматизированные запросы к Маркету капчатся
     # заметно чаще, чем запросы от вошедшего в аккаунт браузера — обычная
@@ -95,6 +105,21 @@ class Config:
             (self.TELEGRAM_BOT_TOKEN or self.MAX_BOT_TOKEN)
             and self.YANDEX_DISTRIBUTION_PARTNER_ID
         )
+
+    @property
+    def YM_PROXY(self) -> Optional[dict]:
+        """Готовый proxy-словарь для playwright.chromium.launch(proxy=...),
+        с логином/паролем, вынутыми из YM_PROXY_URL (см. комментарий там).
+        None, если YM_PROXY_URL не задан."""
+        if not self.YM_PROXY_URL:
+            return None
+        parts = urlsplit(self.YM_PROXY_URL)
+        proxy = {"server": f"{parts.scheme}://{parts.hostname}:{parts.port}"}
+        if parts.username:
+            proxy["username"] = unquote(parts.username)
+        if parts.password:
+            proxy["password"] = unquote(parts.password)
+        return proxy
 
 
 config = Config()

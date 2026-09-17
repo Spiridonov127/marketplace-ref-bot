@@ -56,7 +56,7 @@ def _create_browser_context(playwright):
     """Создаёт контекст браузера с anti-detect настройками."""
     browser = playwright.chromium.launch(
         headless=True,
-        proxy={"server": config.YM_PROXY_URL} if config.YM_PROXY_URL else None,
+        proxy=config.YM_PROXY,
         args=[
             "--disable-blink-features=AutomationControlled",
             "--disable-features=IsolateOrigins,site-per-process",

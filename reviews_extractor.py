@@ -39,7 +39,7 @@ def _try_playwright():
 def _create_context(p):
     browser = p.chromium.launch(
         headless=True,
-        proxy={"server": config.YM_PROXY_URL} if config.YM_PROXY_URL else None,
+        proxy=config.YM_PROXY,
         args=[
             "--disable-blink-features=AutomationControlled",
             "--disable-features=IsolateOrigins,site-per-process",
