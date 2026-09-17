@@ -66,22 +66,29 @@ class MaxBot:
         # "включены" и ждут от пользователя категорию/запрос после /start.
         self.awaiting_query: set = set()
 
+    def _headers(self) -> dict:
+        # Заголовок Authorization, НЕ query-параметр access_token — сервер
+        # явно отвечает "Query parameter access_token is deprecated, use
+        # Authorization header" на botapi.max.ru. Домен важен отдельно: on
+        # platform-api2.max.ru тот же заголовок принимался (GET /me отвечал
+        # 200), но реальные апдейты не приходили никогда — только на
+        # botapi.max.ru, проверено вживую.
+        return {"Authorization": self.token}
+
     def _get(self, method: str, **params):
-        # Токен — query-параметр access_token, а не заголовок Authorization
-        # (так в официальной Python-библиотеке max-botapi-python; версия с
-        # заголовком Authorization и доменом platform-api2.max.ru отвечала
-        # на GET /me, но никогда не отдавала реальные апдейты — из-за этого
-        # бот не видел ни одного входящего сообщения).
-        params["access_token"] = self.token
-        r = self.session.get(f"{API_URL}/{method}", params=params, timeout=100)
+        r = self.session.get(
+            f"{API_URL}/{method}", headers=self._headers(), params=params, timeout=100
+        )
         r.raise_for_status()
         return r.json()
 
     def _post(self, method: str, params: dict = None, json_body: dict = None):
-        params = dict(params or {})
-        params["access_token"] = self.token
         r = self.session.post(
-            f"{API_URL}/{method}", params=params, json=json_body or {}, timeout=15
+            f"{API_URL}/{method}",
+            headers=self._headers(),
+            params=params or {},
+            json=json_body or {},
+            timeout=15,
         )
         r.raise_for_status()
         return r.json()
