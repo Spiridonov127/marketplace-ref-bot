@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o IdentityAgent=none -i %h/.ssh/id_ed25519_yc -R 1080 yc-user@158.160.215.232
+ExecStart=/usr/bin/ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o ConnectTimeout=10 -o IdentityAgent=none -i %h/.ssh/id_ed25519_yc -R 1080 yc-user@158.160.215.232
 Restart=always
-RestartSec=10
+RestartSec=2
 
 [Install]
 WantedBy=default.target
