@@ -30,6 +30,12 @@ class Config:
     # ssh -R с домашней машины поднимает SOCKS5 на localhost:1080 этой ВМ).
     # На Дзен (dzen_poster.py) это не распространяется — там капчи не было.
     YM_PROXY_URL: str = os.getenv("YM_PROXY_URL", "")
+    # Анонимные (без входа) автоматизированные запросы к Маркету капчатся
+    # заметно чаще, чем запросы от вошедшего в аккаунт браузера — обычная
+    # практика антибот-систем доверять авторизованным сессиям больше.
+    # Разовый вход через scripts/save_market_cookies.py (как и для Дзена и
+    # Дистрибуции — своя, отдельная авторизация Яндекс Паспорта).
+    MARKET_COOKIES_PATH: str = os.getenv("MARKET_COOKIES_PATH", "data/market_cookies.json")
     ADMIN_USER_IDS: list[int] = field(default_factory=lambda: [
         int(x) for x in os.getenv("ADMIN_USER_IDS", "").split(",") if x.strip()
     ])

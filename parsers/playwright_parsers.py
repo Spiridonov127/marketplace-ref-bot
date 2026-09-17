@@ -78,7 +78,26 @@ def _create_browser_context(playwright):
         Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en'] });
         window.chrome = { runtime: {} };
     """)
+    _load_market_cookies(context)
     return browser, context
+
+
+def _load_market_cookies(context):
+    """Подгружает cookies вошедшего в аккаунт Яндекса, если они есть (см.
+    scripts/save_market_cookies.py) — анонимные запросы капчатся заметно
+    чаще авторизованных. Без файла работает как раньше, анонимно.
+    """
+    import os
+
+    path = config.MARKET_COOKIES_PATH
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+        context.add_cookies(cookies)
+    except Exception as e:
+        logger.warning(f"[YM] Не удалось загрузить cookies Маркета ({path}): {e}")
 
 
 def _dump_empty_result_debug(page, tag: str):

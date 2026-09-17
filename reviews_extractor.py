@@ -61,6 +61,8 @@ def _create_context(p):
         Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en'] });
         window.chrome = { runtime: {} };
     """)
+    from parsers.playwright_parsers import _load_market_cookies
+    _load_market_cookies(context)
     return browser, context
 
 
