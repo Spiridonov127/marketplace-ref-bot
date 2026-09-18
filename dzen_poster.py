@@ -412,10 +412,21 @@ def post_to_dzen(title: str, content: str, image_url: str = "") -> bool:
                 try:
                     confirm_btn.wait_for(state="hidden", timeout=5000)
                 except Exception:
+                    os.makedirs("data", exist_ok=True)
+                    shot_path = "data/dzen_debug_publish_modal.png"
+                    try:
+                        page.screenshot(path=shot_path, full_page=True)
+                    except Exception:
+                        shot_path = None
+                    try:
+                        modal_text = page.inner_text("body")[:1500]
+                    except Exception:
+                        modal_text = "(не удалось прочитать текст страницы)"
                     logger.error(
                         "[Dzen] Модалка публикации не закрылась после клика "
                         "по финальной кнопке — статья, вероятно, осталась "
-                        "черновиком, публикацию считаю неуспешной"
+                        f"черновиком, публикацию считаю неуспешной. "
+                        f"Скриншот: {shot_path}. Текст страницы: {modal_text}"
                     )
                     browser.close()
                     return False
